@@ -114,11 +114,11 @@ class Workspace(Tool):
         try:
             if not os.path.exists(path) or not os.path.isfile(path):
                 return "Error: File does not exist or is not a file."
-            with open(path, 'r') as f:
+            with open(path, 'rb') as f:
                 import re
                 f.seek(pos)
                 content = f.read(size)
-            return content
+            return content.decode(errors='replace')
         except Exception as e:
             return f"Error reading file: {e}"
 
@@ -128,18 +128,18 @@ class Workspace(Tool):
         """Write text to a file with control over position and mode (rewrite, insert, or append)."""
         """Write content to a file. Supports append, insert or replace modes."""
         try:
-            with open(path, 'r+' if os.path.exists(path) else 'w+') as f:
+            with open(path, 'rb+' if os.path.exists(path) else 'wb+') as f:
                 f.seek(pos)
                 if mode == 'rewrite':
-                    f.write(content)
+                    f.write(content.encode())
                     f.truncate(pos + len(content))
                 elif mode == 'insert':
                     existing = f.read()
                     f.seek(pos)
-                    f.write(content + existing)
+                    f.write(content.encode() + existing)
                 elif mode == 'append':
                     f.seek(0, os.SEEK_END)
-                    f.write(content)
+                    f.write(content.encode())
                 else:
                     return "Error: Invalid mode selected."
             return f"File '{path}' written successfully."
@@ -302,8 +302,8 @@ class CodeLookup:
         for fil in self.files:
             if (os.path.isdir(fil)):
                 continue
-            with open(fil, 'r') as f:
-                source_code = f.read()
+            with open(fil, 'rb') as f:
+                source_code = f.read().decode('utf-8', errors='replace')
             matches = STRUCT_RE.finditer(source_code)
             for match in matches:
                 kind = match.group('kind')
@@ -403,11 +403,11 @@ class CodeLookup:
     def read_file(self, file_path, max_=0):
         content = None
         """Read the contents of a file."""
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, "rb") as f:
             content = f.read()
         if max_ > 0:
             content = content[:max_]
-        return content
+        return content.decode(errors='replace')
 
     def extract_symbols(self, source_code, file_path):
         """Extract function definitions using tree-sitter."""
@@ -419,7 +419,7 @@ class CodeLookup:
             # Handle typedefs"
             if node.type == 'type_definition':
                 kind = 'typedef'
-                name = node.text.decode('utf-8')
+                name = node.text.decode('utf-8', errors='replace')
                 return (kind, name, node)
 
             # Handle plain structs, enums, unions
@@ -429,7 +429,7 @@ class CodeLookup:
                 has_fields = False
                 for child in node.children:
                     if child.type in ('identifier', 'type_identifier'):
-                        identifier = child.text.decode('utf-8')
+                        identifier = child.text.decode('utf-8', errors='replace')
                     elif child.type == 'field_declaration_list':
                         has_fields = True
                 if not has_fields:
@@ -440,20 +440,20 @@ class CodeLookup:
             if node.type == 'type_definition':
                 for child in node.children:
                     if child.type == 'type_identifier':
-                        return ('typedef', child.text.decode('utf-8'), node)
+                        return ('typedef', child.text.decode('utf-8', errors='replace'), node)
 
             # Macros
             if node.type in ('preproc_def', 'preproc_function_def'):
                 for child in node.children:
                     if child.type == 'identifier':
-                        return ('macro', child.text.decode('utf-8'), node)
+                        return ('macro', child.text.decode('utf-8', errors='replace'), node)
 
             # Functions
             for child in node.children:
                 if child.type in ('function_declarator', 'declarator'):
                     for i in child.children:
                         if i.type == "identifier":
-                            return ('function', i.text.decode("utf-8"), node)
+                            return ('function', i.text.decode("utf-8", errors='replace'), node)
                 elif child.type == 'parenthesized_declarator':
                     return find_symbol(child)
 
@@ -584,10 +584,9 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             if fp.endswith('/'):
                 continue
             try:
-                with open(fp, 'r', encoding='utf-8') as f:
+                with open(fp, 'rb') as f:
                     for ln, line in enumerate(f, start=1):
-                        lower_line = line.lower()
-
+                        lower_line = line.decode('utf-8', errors='replace').lower()
                         if method == 'ALL':
                             if all(term in lower_line for term in search_terms):
                                 found[fp] += 1
@@ -1349,7 +1348,7 @@ class PipeLine:
                         if node.end_byte <= len(result.encode()):
                             print("[bold yellow]FIM reply function complete[/]")
                             complete = True
-                            result = result.encode()[node.start_byte:node.end_byte].decode()
+                            result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
                         break
                 if not found_function:
                     print("[bold red]FIM reply no function found[/]")
