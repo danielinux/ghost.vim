@@ -50,9 +50,9 @@ class WebSearch(Tool):
         """Search for a topic using DuckDuckGo. Returns a summary of top matching results."""
         """Search the web for the given query. This tool will return the best matching results on the web. This is only a preview: I will retrieve the information by reading the web pages."""
         from duckduckgo_search import DDGS
-        print(f"** WebSearch executing search for: {query}")
+        # print(f"** WebSearch executing search for: {query}")
         results = DDGS().text(query, max_results=5)
-        ctx = [ 
+        ctx = [
                {
                    "url" : x['href'],
                    "title": x['title'],
@@ -71,7 +71,7 @@ class WebSearch(Tool):
         if size > 2048:
             size = 2048
         try:
-            print(f"** WebSearch fetching URL: {url}")
+            #print(f"** WebSearch fetching URL: {url}")
             content = urllib.request.urlopen(url).read()
             soup = BeautifulSoup(content, 'html.parser')
             text = soup.get_text()
@@ -80,7 +80,6 @@ class WebSearch(Tool):
             return f"Error fetching URL: {e}"
 
 # --- Container ---
-
 class Container:
     def __init__(self, name):
         self.name = name
@@ -90,7 +89,6 @@ class Container:
         return subprocess.run(['podman', 'exec', self.name] + argv, capture_output=True, text=True)
 
 # --- Workspace Tool ---
-
 class Workspace(Tool):
     def __init__(self, container):
         super().__init__()
@@ -171,7 +169,6 @@ class Workspace(Tool):
             return f"Error appending file: {e}"
 
 # --- DocReader Tool ---
-
 from langchain_core.tools import tool
 from collections import defaultdict
 
@@ -282,7 +279,6 @@ class CodeLookup:
         except:
             pass
         self.parser = Parser(Language(tree_sitter_c.language()))
-        self.ghost_dir = os.path.join(base_dir, ".ghost")
         self.ghost_reset()
 
     def refresh(self):
@@ -323,7 +319,7 @@ class CodeLookup:
                     self.symbol_table[extended_uid] = fn
                     #print(f'Added symbol {kind} {name} from {fil} {str(line)} via re module')
 
-                    
+
     def ghost_reset(self):
         # Recursively copy the original sources in the ghost dir
         for root, dirs, files in os.walk(self.base_dir):
@@ -343,26 +339,44 @@ class CodeLookup:
 
     def ghost_apply(self, patch):
         file = patch['path']
-        with open(file, 'r+') as f:
-            content = f.read()
-            if patch['removing'] in content and '\n' in patch['removing']:
-                content = content.replace(patch['removing'], patch['adding'])
-                f.seek(0)
-                f.write(content)
-                f.truncate()
-            else:
-                n = patch['line']
-                # Insert the patch at the specified line
-                lines = content.split('\n')
-                lines.insert(n-1, patch['adding'])
-                f.seek(0)
-                f.write('\n'.join(lines))
-                f.truncate()
+        line = patch['line']
+        removing = patch.get('removing', '')
+        adding = patch.get('adding','')
+        if (len(adding) > 0) and not adding.endswith('\n'):
+            adding += '\n'
+        if (len(removing) > 0) and not removing.endswith('\n'):
+            removing += '\n'
+
+
+        rem_lines = removing.count('\n')
+        print('lines to remove: ', str(rem_lines))
+
+        with open(file, 'rb+') as f:
+            content = f.read().decode(errors='replace')
+        lines = content.splitlines()
+        if removing in content and len(patch['removing']) > 0:
+            idx = content.index(removing)
+            sz = len(removing)
+            prefix = content[0:idx - 1]
+            suffix = content[idx + sz:]
+            context = adding
+        else:
+            prefix = '\n'.join(lines[:line])
+            context = adding
+            suffix = '\n'.join(lines[line:]) + '\n'
 
         # Update the symbols for the modified file
         file = file.replace(self.ghost_dir, '.')
+
         if file not in self.files:
             self.files.append(file)
+        with open(file, 'wb') as f:
+            content = prefix + '\n'  + context + suffix
+            print(f'Prefix: {prefix[-40:]}')
+            print(f'Context: {context}')
+            print(f'Suffix: {suffix[:40]}')
+
+            f.write(content.encode())
         while True:
             found = False
             for s in self.symbol_table:
@@ -372,7 +386,12 @@ class CodeLookup:
                     break
             if not found:
                 break
-
+            if os.path.getsize(file) == 0:
+                try:
+                    os.remove(file)
+                except:
+                    pass
+                self.files.remove(file)
         symbols = self.extract_symbols(content, file)
         self.symbol_table.update(symbols)
 
@@ -425,7 +444,7 @@ class CodeLookup:
             # Handle plain structs, enums, unions
             if node.type in ('struct_specifier', 'union_specifier', 'enum_specifier'):
                 kind = node.type.replace('_specifier', '')  # struct/union/enum
-                identifier = None 
+                identifier = None
                 has_fields = False
                 for child in node.children:
                     if child.type in ('identifier', 'type_identifier'):
@@ -472,23 +491,23 @@ class CodeLookup:
                 symbol_type, symbol_name, def_node = find_symbol(node)
             else:
                 pass
-                
+
             if symbol_name:
                 start_line = def_node.start_point[0] + 1  # Convert to 1-based indexing
                 extended_uid = file_path + ":" + symbol_name + ":" + str(start_line)
                 fn = { 'name':symbol_name, 'type': symbol_type, 'file':file_path, 'line':start_line , 'start': def_node.start_byte , 'end':def_node.end_byte}
                 symbols[extended_uid] = fn
-            
+
             for child in node.children:
                 visit(child)
-        
+
         visit(root_node)
         return symbols
 
     # Process directory recursively
     def process_directory(self, directory):
         """Recursively process a directory and parse C/H files."""
-        
+
         for root, dirs, files in os.walk(directory):
             for d in dirs:
                 if (os.path.basename(d).startswith('.')):
@@ -616,7 +635,8 @@ class ExtendedLlamaScope(CodeLookup, Tool):
         for x in sorted_found_desc:
             ret += x + ' ('+str(sorted_found_desc[x])+' lines matching)\n'
         return ret
-    
+
+
     @staticmethod
     @tool
     def lookup_freetext_in_file(path, string, method):
@@ -652,7 +672,7 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             return ''.join(lines[start_line:start_line + num_lines])
         except Exception as e:
             return f"Error getting file content: {e}"
-    
+
     def __init__(self, base_dir):
         CodeLookup.__init__(self,base_dir)
         Tool.__init__(self)
@@ -666,6 +686,17 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             if self.symbol_table[s]['name'] == symbol:
                 return self.symbol_table[s]
 
+    def find_all_instances(self, text) -> list[str]:
+        """Find all instances of a given text across files."""
+        matches = []
+        for file_path in self.files:
+            if not os.path.isdir(file_path):
+                with open(file_path, 'rb') as f:
+                    content = f.read().decode(errors='replace')
+                    if text in content:
+                        matches.append(file_path)
+        return matches
+
     def get_function_code(self, symbol: str) -> str:
         match = None
         for s in self.symbol_table:
@@ -673,7 +704,7 @@ class ExtendedLlamaScope(CodeLookup, Tool):
                 match = self.symbol_table[s]
                 break
         if not match:
-            return '\n'
+            return None
         with open(match['file'], 'r') as f:
             f.seek(match['start'])
             content = f.read(match['end'] - match['start'])
@@ -721,9 +752,11 @@ class ExtendedLlamaScope(CodeLookup, Tool):
         code = ''
         for s in self.symbol_table:
             sym = self.symbol_table[s]
-            code = self.get_function_code(sym['name'])
-            if symbol in code and sym['name'] != symbol and sym['name'] not in callers:
+            code += self.get_function_code(sym['name']) + '\n'
+            if code and symbol in code and sym['name'] != symbol and sym['name'] not in callers:
                 callers.append(sym['name'])
+            if len(callers) >= 5:
+                break
         print("[magenta]Found " + str(len(callers)) + " callers[/]")
         #print(str(callers))
         return code
@@ -731,7 +764,7 @@ class ExtendedLlamaScope(CodeLookup, Tool):
     def get_called_functions(self, symbol: str) -> list:
         code = self.get_function_code(symbol)
         if not code:
-            return []
+            return ''
         try:
             tree = self.parser.parse(code.encode())
             root = tree.root_node
@@ -749,6 +782,9 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             walk(root)
 
             print("[magenta]Found " + str(len(calls)) + " called functions[/]")
+            if len(calls) > 5:
+                calls = calls[0:5]
+            print("[magenta](Limiting context to 5 called functions)[/]")
             code = ''
             for fn in calls:
                 code += self.get_function_code(fn) + '\n'
@@ -756,103 +792,7 @@ class ExtendedLlamaScope(CodeLookup, Tool):
 
         except Exception as e:
             print(f"[Tree-sitter error] {e}")
-            return []
-
-    def get_function_scope(self, symbol: str) -> str:
-        return self.get_function_code(symbol)
-
-    def get_code_around_line(self, symbol: str) -> tuple[str, str]:
-        match = None
-        for s in self.symbol_table:
-            if self.symbol_table[s]['name'] == symbol:
-                match = self.symbol_table[s]
-                break
-        if not match:
-            return '\n'
-        with open(match['file'], 'r') as f:
-            lines = f.readlines()
-        line = match['line']
-        #print(f'line is {str(line)}')
-        start_line = line - 30
-        end_line = line + 30
-        
-        res = (
-                ''.join(lines[start_line:line]),
-                ''.join(lines[line:end_line])
-        )
-        #print('returning '+str(res))
-        return res
-
-    def get_file_content_for_symbol(self, symbol: str, before: bool = False, after: bool = False) -> str:
-        """Get content from a file before or after a symbol."""
-        match = None
-        for s in self.symbol_table:
-            if self.symbol_table[s]['name'] == symbol:
-                match = self.symbol_table[s]
-                break
-        if not match:
-            return '\n'
-        with open(match['file'], 'r') as f:
-            lines = f.readlines()
-        symbol_line = match['line']
-        if before:
-            return ''.join(lines[max(0, symbol_line - 10):symbol_line])
-        if after:
-            return ''.join(lines[symbol_line + 1:symbol_line + 11])
-        return ''
-
-    def get_code_after_includes(self, path: str) -> str:
-        """Finds the lines after the last #include in a file."""
-        try:
-            with open(path, 'r') as f:
-                lines = f.readlines()
-            last_include = 0
-            for i, line in enumerate(lines):
-                if line.strip().startswith('#include'):
-                    last_include = i
-            return ''.join(lines[last_include + 1:last_include + 6])
-        except Exception as e:
-            return f"Error reading file: {e}"
-
-    def get_neighboring_functions(self, symbol: str, limit: int = 3) -> str:
-        """Return source code for up to `limit` functions before and after the given symbol."""
-        match = None
-        for s in self.symbol_table:
-            if self.symbol_table[s]['name'] == symbol:
-                match = self.symbol_table[s]
-                break
-        if not match:
-            return '\n'
-        f = match['file']
-        matches = []
-        for s in self.symbol_table:
-            if self.symbol_table[s]['file'] == f and self.symbol_table[s]['type'] == 'function' and self.symbol_table[s]['name'] != symbol:
-                matches.append(s)
-        matches.sort(key=lambda x: self.symbol_table[x]['start'])
-
-        match_index = next((i for i, m in enumerate(matches) if self.symbol_table[m]['name'] == symbol), None)
-        if match_index is None:
-            return '\n'  # Symbol not found in the list of functions
-
-        # Determine range around the target function
-        start = max(0, match_index - limit)
-        end = min(len(matches), match_index + limit + 1)
-
-        results = []
-        for i in range(start, end):
-            if i == match_index:
-                continue  # skip
-            entry = self.symbol_table[i]
-            try:
-                with open(entry['path'], 'rb') as f:
-                    f.seek(entry['start'])
-                    content = f.read(entry['end'] - entry['start'])
-                    results.append(content.decode(errors='replace'))
-            except Exception as e:
-                results.append(f"/* Error reading {entry['name']}: {e} */")
-
-        return '\n\n'.join(results)
-
+            return ''
 
     def byte_to_line(self, path: str, byte_offset: int) -> int:
         try:
@@ -862,8 +802,6 @@ class ExtendedLlamaScope(CodeLookup, Tool):
         except Exception:
             return 0
 
-
-            
 class PipeLine:
     def __init__(self, workspace = None, root_dir = '.'):
         self.workspace = workspace
@@ -916,14 +854,15 @@ class PipeLine:
         Each task MUST include:
         - \"type\": the type of transformation (see task list)
         - \"target\": the function, macro, type or symbol name
+        - \"target_new\": The new name for the symbol or the file, if applicable
         - \"file\": the file where the transformation should be applied
         - \"details\": human-readable explanation of the task, giving details about the transformation requested
         - \"ADTs\": a list of Abstract Data Types (ADTs) that should be used in the transformation (typedefs, enums, structs, unions) and are ALREADY PRESENT in the codebase.
-        - \"references\": a list of suggested symbols such as functions or macros names, that could be useful to look at as reference, performing similar task or in the same domain, or using same tools types or algorithms. The references MUST BE symbols ALREADY PRESENT in the codebase.
+        - \"references\": a list of suggested symbols such as functions or macros names, that are useful to look at as reference, performing similar task or in the same domain, or using same tools types or algorithms. The references MUST BE symbols ALREADY PRESENT in the codebase. In case of new functions, types or macros, at least two references must be present.
         """
         prompt = """
         Work one step at a time, as follows:
-        - Read and understand the input document. 
+        - Read and understand the input document.
         - Establish a solid knowledge of the code that will be affected by the changes. Check the types and functions involved in the changes that will be commanded.
         - Research: Look for any relevant symbols in the codebase, to reference or suggest in the output tasks fields. Only use symbols that you are sure are present in the codebase.
         - Loop: repeat the research step as many times as needed, until you are satisfied about the knowledge and you can proceed to generate the list of tasks.
@@ -949,7 +888,7 @@ class PipeLine:
         ]
         #print(messages)
         while True:
-            print("[green]Thinking...[/]")
+            print("\n[green]Thinking...[/] 🤔💭 ", end = '\r')
             response = ollama.chat(
                 model=model,
                 messages=messages,
@@ -968,7 +907,7 @@ class PipeLine:
                     #print(f"[bold green]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
                     try:
                         if call.function.name in [x.name for x in self.llamascope.get_tools()]:
-                            print("[green]Reading code...[/]")
+                            print("[green]Reading code...[/] ⚙️               ", end="\r" )
                             result = self.llamascope.handle_tool_call(call)
                     except Exception as e:
                         messages+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
@@ -987,6 +926,7 @@ class PipeLine:
                                   Rethink your life choices, agent. You have been warned.
                                   Now try again taking a different strategy.
                                   """}
+                        print('\n😵😵😵                                      ')
             else:
                 try:
                     # Unolad task module
@@ -1020,7 +960,7 @@ class PipeLine:
         - Research. Look for any useful information on the internet if you are not sure about the concepts mentioned, the meaning of any terminology used, or the mechanisms involved to reach the final goal.
         - Read the code. Look in the codebase to find any relevant symbols, types, macros, files, functions. Select all those that are relevant for the tasks and list them into separate categories that are required in the final answer.
         - Identify and list: Identify and list all the symbols (types, macros, files, functions) that will be affected by the action being proposed to the development team.
-        - Loop: Repeat [Read-the-prompt, Research, Read-the-code, Identify-and-list] sequence until all the lists are complete and all the symbols are identified.
+        - Loop: Repeat [Read-the-prompt, Research, Read-the-code, Identify-and-list] sequence until the lists are complete and the symbols are identified.
         - Final response: Only when all the required field are filled, I will give a final response in the bullet-list format required.
 
 
@@ -1034,10 +974,10 @@ class PipeLine:
           - Actions: The actions that the development team will take. Maximum three sentences in natural language.
           - Types: a list of Relevant types (e.g. structs, unions, enums). Those are actual types defined in the code. Look them up.
           - Macros: a list of Relevant macros existing in the codebase. Those are also already in the code, find the relevant ones.
-          - Files: a list of full paths to affected files in the codebase (can be existing or new)
+          - Files: a list of full paths to affected files in the codebase (can be existing or new). Always use full path. YOU MUST use full path. Only full paths are accepted by tools and patches.
           - Functions: a list of Relevant functions existing in the codebase (only existing ones you were able to look up in the codebase)
           - TODO: a list of names and descriptions of symbols to defines, e.g. types or functions to introduce and implement from scratch.
-         
+
          Don't create the final response until you can fill all the requested fields. Use the tool calls API to identify all the items requested. Do not make up symbol or file names. Do not make assumptions on symbols existence until you checked with the provided API calls.
 
          """
@@ -1067,7 +1007,7 @@ class PipeLine:
         ]
         #print(messages)
         while True:
-            print(f"[cyan]Thinking...[/]")
+            print("\n[cyan]Thinking...[/] 🤔💭 ", end='\r')
             response = ollama.chat(
                 model=model,
                 messages=messages,
@@ -1084,15 +1024,15 @@ class PipeLine:
                     #print(f"[bold cyan]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
                     try:
                         if call.function.name in [x.name for x in self.llamascope.get_tools()]:
-                            print(f"[cyan]Reading code...[/]")
+                            print("[cyan]Reading code...[/] ⚙️                    ", end = '\r')
                             result = self.llamascope.handle_tool_call(call)
                         elif call.function.name in [x.name for x in self.web.get_tools()]:
-                            print(f"[green]Browsing the internet...[/]")
+                            print("\n[green]Browsing the internet...[/] 🌐🌐🌐     ", end='\r')
                             result = self.web.handle_tool_call(call)
-                            print("Web result:\n", result)
+                            #print("Web result:\n", result)
                         elif call.function.name in [x.name for x in self.doc.get_tools()]:
-                            print(f"[red]Reading the books...[/]")
-                            print(f"[bold cyan]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
+                            print(f"\n[red]Reading books...[/]    📖🤓                ", end = '\r')
+                            #print(f"[bold cyan]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
                             result = self.doc.handle_tool_call(call)
                     except Exception as e:
                         messages+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
@@ -1111,22 +1051,26 @@ class PipeLine:
                                   Rethink your life choices, agent. You have been warned.
                                   Now try again taking a different strategy.
                                   """}
+                        print('\n😵😵😵                                      ')
             else:
                 return response['message']['content']
 
     def run(self, prompt):
-        try:
-            expanded_prompt = self.call_prompt_agent(prompt)
-        except ValueError as e:
-            print("Failed to parse prompt:", e)
-            return
+        if '@research' in prompt:
+            try:
+                expanded_prompt = self.call_prompt_agent(prompt)
+            except ValueError as e:
+                print("Failed to parse prompt:", e)
+                return
+            expanded_prompt = 'User requested: ' + prompt + '\nI have expanded that request into the following actions:\n\n' + expanded_prompt
+            print(f"[bold green]{expanded_prompt}[/bold green]")
+        else:
+            expanded_prompt = prompt
         patches = []
-        expanded_prompt = 'User requested: ' + prompt + '\nI have expanded that request into the following actions:\n\n' + expanded_prompt
-        print(f"[bold green]{expanded_prompt}[/bold green]")
-
+        error_retry = 0
         while len(patches) == 0:
             try:
-                print('[green]Tasking...[/]')
+                print('[green]Tasking...[/]  ✅                           ', end='\r' )
                 tasks = self.call_task_agent(expanded_prompt)
             except ValueError as e:
                 print("Failed to parse task list:", e)
@@ -1142,24 +1086,48 @@ class PipeLine:
 
                 print(f"Dispatching task: {task_type} for target '{target}': {task.get('details')}")
 
-                patch = self.dispatch_to_fim(task)
-                if not patch:
-                    patch = self.dispatch_to_editor(task)
-                if not patch:
+                try:
+                    task_patches = self.dispatch_to_fim(task)
+                    if len(task_patches) == 0:
+                        task_patches = self.dispatch_to_editor(task)
+                    if len(task_patches) == 0:
+                        break
+                except Exception as err:
+                    task_patches = [ {'error':err} ]
+
+
+                for patch in task_patches:
+                    error = patch.get('error')
+                    if error:
+                        print('[red]Error in patch[/]', error)
+                        break
+
+
+                    adding = patch.get('adding', '')
+                    removing = patch.get('removing', '')
+                    add_lines = adding.count('\n')
+                    remove_lines = removing.count('\n')
+                    if len(adding) > 0 and not adding.endswith('\n'):
+                        add_lines += 1
+                    if len(removing) > 0 and not removing.endswith('\n'):
+                        remove_lines += 1
+                    if add_lines == 0 and remove_lines == 0:
+                        print('[red]Empty patch[/]')
+                        break
+                    print(f"Patching {patch['path']}:{str(patch['line'])}:\n" + str(add_lines) + '+, ' + str(remove_lines) + '-\n')
+                    self.llamascope.ghost_apply(patch)
+                    patches.append(patch)
+            if error:
+                error = None
+                error_retry += 1
+                print("[red][FIM]Error executing pipeline[/]")
+                if error_retry > 3:
                     break
-                add_lines = patch.get('adding', '').count('\n')
-                remove_lines = patch.get('removing', '').count('\n')
+                print("[red][FIM]Retrying.[/]")
+                patches = []
+                continue
 
-                if add_lines == 0 and remove_lines == 0:
-                    print('[red]Empty patch[/]')
-                    break
-                print(f"Patching {patch['path']}:{str(patch['line'])}:\n" + str(add_lines) + '+, ' + str(remove_lines) + '-\n')
-                self.llamascope.ghost_apply(patch)
-                patches.append(patch)
-
-
-        print("Total patches: " + str(len(patches)))
-
+        print("🩹 Total patches: 🩹" + str(len(patches)))
         response = { 'role': 'assistant', 'message': {'content': {'patches': patches} } }
         return response
 
@@ -1169,13 +1137,13 @@ class PipeLine:
             print("[red][FIM]No file specified[/]")
             return None
 
-        print(f"\n\n[bold green][FIM]{task['type']}:[/] {task['file']}, {task['target']}. [bold green]{task['details']}[/]")
+        print(f"\n\n[bold green] 👻 [FIM]{task['type']}:[/] {task['file']}, {task['target']}. [bold green]{task['details']}[/]")
 
         deleting = ""
         prefix = ''
         suffix = ''
         context = ''
-        
+
         if task['type'] in ('FunctionGeneration', 'SymbolImplementation'):
             file_path = task.get('file')
             if not os.path.exists(file_path):
@@ -1192,7 +1160,7 @@ class PipeLine:
             sym = self.llamascope.get_symbol(task['target'])
             if not sym:
                 print(f'[red]Error: Symbol {task["target"]} not found.[/red]')
-                return None
+                return []
             file = sym['file']
             line = sym['line']
             with open(file, 'r') as f:
@@ -1205,79 +1173,69 @@ class PipeLine:
             prefix += '  * - Always complete the code. DO NOT leave stubs or unfinished, non-working code.\n'
             prefix += '  * - If parts of the original code should be part of the answer, copy them rather than referencing the removed code.\n'
             prefix += '  */'
+            prefix += self.llamascope.get_called_functions(task['target']) + '\n\n'
+            suffix = self.llamascope.get_callers(task['target']) + suffix
 
         elif task['type'] in ('InlineFix', 'MiniRewrite'):
             sym = self.llamascope.get_symbol(task['target'])
             if not sym:
                 print(f'[red]Error: Symbol {task["target"]} not found.[/red]')
-                return None
+                return []
             line = sym['line']
             file = sym['file']
+            prefix += self.llamascope.get_called_functions(task['target']) + '\n\n'
+            suffix = self.llamascope.get_callers(task['target']) + suffix
         elif task['type'] == 'TypeDefinition':
-            prefix = self.llamascope.get_typedef_region(before=True)
-            suffix = self.llamascope.get_typedef_region(after=True)
-            context = self.llamascope.get_typedef_usage_context(task['target'])
-            sym = self.llamascope.get_symbol(task['target'])
-            line = sym['line']
-            file = sym['file']
-
-        elif task['type'] == 'FunctionExtraction':
-            prefix, suffix = self.llamascope.get_extraction_window(task['target'])
-            context = self.llamascope.get_function_scope(task['target'])
-            sym = self.llamascope.get_symbol(task['target'])
-            line = sym['line']
-            file = sym['file']
-
+            file_path = task.get('file')
+            if not os.path.exists(file_path):
+                with open(file_path, 'w') as f:
+                    f.write(f'/* {file_path} */ ')
+            with open(file_path, 'r') as f:
+                content = f.read()
+                line = content.count('\n')
+            context = ''
+            context += 'Generate a new type called ' + task['target'] + '\n'
+            file = file_path
+            with open(file_path, 'rb') as f:
+                src = f.read().decode('utf-8', errors='replace')
+                line = src.count('\n')
         elif task['type'] == 'MacroDefinition':
             sym = self.llamascope.get_symbol(task['target'])
             file = task.get('file')
             if not sym:
-                context = f'The new macro {task["target"]} is not yet defined in the current file. Write it from scratch according to the Goal.'
-                line = 0
+                context = f'The new macro`{task["target"]}` is not yet defined in the current file. Write it from scratch.'
+                with open(file, 'rb') as f:
+                    content = f.read().decode('utf-8', errors='replace')
+                if not '#define' in content:
+                    line = 0
+                else:
+                    idx = content.index('#define')
+                    line = content[0:idx].count('\n') - 1
             else:
                 line = sym['line']
-
-                with open(file, 'r') as f:
-                    code = f.read()
+                with open(file, 'rb') as f:
+                    code = f.read().decode('utf-8', errors='replace')
                 deleting = code[sym['start']:sym['end']]
             prefix = '/* Original macro before the requested changes: */ \n' + deleting + '\n'
             context += 'Rules:\n'
             context += '- If parts of the original code should be part of the answer, copy them rather than referencing the removed code.\n'
-
         else:
-            print("Task type not supported for FIM yet.")
-            return None
-
-        # Adjust line number
-        if line == 0:
-            with open(file, 'r') as f:
-                content = f.read(20000)
-            response = ollama.chat(
-                    model='qwen2.5-coder:7b',
-                    messages=[
-                        { 'role': 'system', 'content': 'You read C code and identify the correct line to place a new symbol.' },
-                        { 'role': 'user', 'content': 'Find the line number where the new symbol `' + task["target"] +'` should be inserted in the following code:\n' + content + '\n' + 'Your output should only be the line number. Omit any other comments or text. Only output one number.\n LINE NUMBER: ' }
-                        ],
-                options={
-                    "temperature": 0,
-                    "top_p": 0.4,
-                    "repeat_penalty": 1,
-                    "num_ctx": 20000
-                }
-            )
-            try:
-                line = int(response['response'].split(' ')[-1])
-                print(f'[bold yellow] AI assigned line number {str(line)} for symbol {task["target"]} in file {file}.[/]')
-            except:
-                print('[bold red] Failed to parse line number from AI response. Using default line 0.[/]')
-
+            return []
 
         response_insert = self.call_fim(prefix, suffix, context, file, line, task)
 
         if response_insert:
-            print('Deleting replaced code')
-            response_insert['removing'] += deleting
-        return response_insert
+            if (deleting and deleting.count('\n') > 0):
+                print('[yellow]Deleting replaced code[/]')
+                response_insert['removing'] += deleting
+            code = response_insert['adding']
+            tree = self.llamascope.parser.parse(code.encode())
+            node = tree.root_node.children[0]
+            code = code[0:node.end_byte] # Include from the beginning to avoid losing code comments
+            if not code.endswith('\n'):
+                code += '\n'
+            response_insert['adding'] = code
+        return [response_insert]
 
     def call_fim(self, prefix: str, suffix: str, context: str, file: str, line: int, task: dict) -> str:
         model = "qwen2.5-coder:14b"
@@ -1293,14 +1251,12 @@ class PipeLine:
         fim_comment_block += rules
         fim_comment_block += '\n*/\n'
         prefix += self.llamascope.get_types(task['ADTs']) +'\n\n'
-        prefix += self.llamascope.get_called_functions(task['target']) + '\n\n' 
         prefix += self.llamascope.get_references(task['references']) + '\n\n'
-        suffix = self.llamascope.get_callers(task['target']) + suffix
         result = ''
         complete = False
         found_function = False
-        print(f'[bold yellow]Crafting Code: {file}:{str(line)}[/]')
-        print(f'[yellow]Context len: prefix {str(len(prefix))} B, suffix {str(len(suffix))} B[/]')
+        print(f'[bold yellow] 👻 Crafting Code 👻: {file}:{str(line)}[/]')
+        print(f'[yellow]📎 Context len: prefix {str(len(prefix))} B, suffix {str(len(suffix))} B[/]')
 
         # VERBOSE
         #print(f'prefix:\n {prefix}')
@@ -1316,6 +1272,7 @@ class PipeLine:
                     "top_p": 0.8,
                     "repeat_penalty": 1.1,
                     "num_ctx": 12000,
+                    "num_predict":8192,
                     "min_p": 0.2
                 },
                 "stream": False,
@@ -1331,7 +1288,7 @@ class PipeLine:
                 print("[yellow]Received FIM response...[/]")
             except requests.RequestException as e:
                 print(f"[FIM Error] {e}")
-                return ""
+                return []
 
             # If there is an incomplete function in the generation, call again
             if not complete:
@@ -1362,7 +1319,7 @@ class PipeLine:
                     "adding" : result.strip(),
                     "removing" : ""
                      }
-                
+
         except Exception as e:
             print(f"[bold red][FIM Error][/] {e}")
         return patch
@@ -1373,26 +1330,99 @@ class PipeLine:
         code = ""
         file = task['file']
         line = -1
+        matches = []
         if task['type'] == 'SymbolRename':
-            result = self.llamascope.lookup_symbol(task['target'])
-            print("[Editor] Located symbol for rename:", result)
-            print("[Editor] This feature is not implemented yet.")
-            # TODO: find all instances via freetext and replace using `re`
-            return {"error": "not implemented"}
-        elif task['type'] == 'HeaderEdit':
-            header_lines = self.llamascope.lookup_freetext_in_file(task['target'], "#include")
-            print("[Editor] Header includes:", header_lines)
-            return {"error": "not implemented"}
+            oldname = task['target']
+            newname = task['target_new'].split(' ')[-1]
+            print("[Editor] Renaming symbol from:", oldname, "to", newname)
+            with open(file, 'rb') as f:
+                src = f.read()
+            if oldname.encode() not in src:
+                print('no matches.\n')
+                return []
+            lines = src.decode(errors='replace').splitlines()
+            byte_to_line = {}
+            offset = 0
+            tree = self.llamascope.parser.parse(src)
+
+            for i, line in enumerate(lines):
+                for j in range(len(line) + 1):
+                    byte_to_line[offset + j] = i
+                offset += len(line) + 1
+
+            def symbol_rename_visit(node):
+                #if node.type == "identifier" or node.type == "type_identifier" or node.type == "function_declarator" or node.type == "function_definition":
+                name = src[node.start_byte:node.end_byte].decode(errors='replace')
+                if name.count('\n') == 0 and oldname in name:
+                    #print(f'Node type: {node.type} Name: {name} Start byte: {node.start_byte} End byte: {node.end_byte}')
+                    matches.append(node)
+                else:
+                    for child in node.children:
+                        symbol_rename_visit(child)
+            symbol_rename_visit(tree.root_node)
+
+            patches = []
+            for n in reversed(matches):
+                start = n.start_byte
+                end = n.end_byte
+                line_num = byte_to_line.get(start, -1)
+                if line_num < 0 or line_num >= len(lines):
+                    continue
+
+                print(f'At line n. {str(line_num)}')
+                orig_line = lines[line_num]
+                print(f'Original line: {orig_line}')
+
+
+                # Compute start/end column
+                byte_start_of_line = sum(len(l) + 1 for l in lines[:line_num])
+                start_col = start - byte_start_of_line
+                end_col = end - byte_start_of_line
+
+                new_line = orig_line[:start_col] + orig_line[start_col:end_col].replace(oldname, newname) + orig_line[end_col:]
+                print(f'New line: {new_line}')
+                patch = {'path': file,
+                         'line': line_num + 1,
+                         'adding': new_line,
+                         'removing': orig_line
+                }
+                patches.append(patch)
+            return patches
         elif task['type'] == 'FileMove':
-            print("[Editor] Would perform file move (stub):", task['target'])
-            return {"error": "not implemented"}
-        elif task['type'] == 'CommentInsertion':
-            code = self.llamascope.get_symbol(task['target'])
-            print("[Editor] Found symbol to insert comments:", code)
-            return {"error": "not implemented"}
+            with open(task['file'], 'rb') as f:
+                code = f.read().decode('utf-8', errors='replace')
+            patches = [
+                    { 'path' : task['file'],
+                      'line' : 0,
+                      'adding': '',
+                      'removing': code
+                    },
+                    { 'path' : task['target'],
+                      'line' : 0,
+                      'adding' : code,
+                      'removing' : ''
+                    }
+                ]
+            return patches
         elif task['type'] == 'IncludeFix':
-            print("[Editor] Would perform include fix (stub):", task['target'])
-            return {"error": "not implemented"}
+            if not '#include' in task['target']:
+                return [{"error": "invalid 'IncludeFix' target: " + task['target' ]}]
+            file = task['file']
+            with open(file, 'rb') as f:
+                code = f.read().decode('utf-8', errors='replace')
+            if '#include' in code:
+                idx = code.index('#include')
+                line = code[:idx].count('\n')
+            else:
+                line = 0
+
+            patch = {
+                    "path" : file,
+                    "line" : line,
+                    "adding": task['target'] + '\n',
+                    "removing": ""
+                }
+            return [patch]
         elif task['type'] == 'DeleteFunction':
             sym = self.llamascope.get_symbol(task['target'])
             print(f"[Editor] Deleting function: {sym['name']}")
@@ -1401,14 +1431,14 @@ class PipeLine:
             line = sym['line']
             with open(file, 'r') as f:
                 code = f.read()[sym['start']:sym['end']]
+            patch = {"path" : file,
+                     "line" : line,
+                     "adding": "",
+                     "removing": code
+                    }
+            return [patch]
         else:
-            return {"error": "invalid task for [Editor]: " + task['type']}
-        patch = {"path" : file,
-                 "line" : line,
-                 "adding": "",
-                 "removing": code
-            }
-        return patch
+            return [{"error": "invalid task for [Editor]: " + task['type']}]
 
 def convert_patches_to_unified_diff(patches: list[dict]) -> str:
     """Convert a list of patches in JSON format into standard unified diff format."""

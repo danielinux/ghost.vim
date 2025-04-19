@@ -1,13 +1,12 @@
 task_list = [
-    {"type": "DeleteFunction", "description": "Remove a function completely from the codebase (e.g., when replacing a stub or refactoring it out).", "agent": "editor"},
     {"type": "FunctionGeneration", "description": "Create a new function based on a task description and context. Specify arguments and return value.", "agent": "fim"},
     {"type": "FunctionRefactor", "description": "Modify an existing function to change its logic, structure, or dependencies.", "agent": "fim"},
     {"type": "TypeDefinition", "description": "Define a new struct, enum, or typedef to support new data abstractions.", "agent": "fim"},
     {"type": "StubCompletion", "description": "Complete the body of a stub function currently defined with empty braces.", "agent": "fim"},
     {"type": "SymbolImplementation", "description": "Provide the implementation of a declared but undefined function or symbol.", "agent": "fim"},
-    {"type": "SymbolRename", "description": "Rename a symbol (function, variable, type) across the entire workspace.", "agent": "editor"},
-    {"type": "MacroDefinition", "description": "Add a new macro definition or constant using #define or enum values. Ensure that the file exists.", "agent": "fim"},
-    {"type": "HeaderEdit", "description": "Modify header files, includes, or function prototypes.", "agent": "editor"},
-    {"type": "FileMove", "description": "Move or rename a file within the workspace (source or header).", "agent": "editor"},
-    {"type": "IncludeFix", "description": "Add missing #include directives to resolve unknown types or functions. \"target\" argument is the full #include statement", "agent":"editor" }
+    {"type": "MacroDefinition", "description": "Add a new macro definition or constant using #define or enum values. Ensure that the file exists. \"target\" argument contains the whole macro.", "agent": "fim"},
+    {"type": "SymbolRename", "description": "Rename a symbol (function, variable, type) across the entire workspace. \"target_new\" argument contains the new symbol name.", "agent": "editor"},
+    {"type": "FileMove", "description": "Move or rename a file within the workspace (source or header). \"target_new\" argument contains the new file name.", "agent": "editor"},
+    {"type": "IncludeFix", "description": "Add missing #include directives to resolve unknown types or functions. \"target\" argument is the full #include statement", "agent":"editor"},
+    {"type": "DeleteFunction", "description": "Remove a function completely from the codebase (e.g., when replacing a stub or refactoring it out).", "agent": "editor"}
 ]

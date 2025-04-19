@@ -20,19 +20,24 @@ function! ghost#Run() abort
 
   " Save current window to return to after starting the terminal job
   let l:prev_win = win_getid()
-  let l:split_height = 10
-  let l:old_splitbelow = &splitbelow
-  set splitbelow
-  wincmd j
+  let l:split_width = 50
+  " let l:old_splitbelow = &splitbelow
+  " set splitbelow
+  let l:old_splitright = &splitright
+  set splitright
 
-  " Open horizontal terminal split at the bottom
-  execute l:split_height . "split"
+  " Open vertical terminal split on the right
+  vsplit
+  wincmd l
+  let l:ghost_win = win_getid()
+  execute 'vertical resize' . l:split_width
   call term_start(['python3', '-u', l:script_path, l:input_text], {
         \ 'curwin': v:true,
         \ 'exit_cb': function('ghost#OnExit') })
 
   " Restore 'splitbelow' setting
-  let &splitbelow = l:old_splitbelow
+  " let &splitbelow = l:old_splitbelow
+  let &splitright = l:old_splitright
 
   " Return to original window
   call win_gotoid(l:prev_win)
