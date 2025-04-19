@@ -5,6 +5,7 @@ import tree_sitter_c
 import os
 import ollama
 import re
+import time 
 from rich import print
 
 last_query_time = 0
@@ -372,10 +373,6 @@ class CodeLookup:
             self.files.append(file)
         with open(file, 'wb') as f:
             content = prefix + '\n'  + context + suffix
-            print(f'Prefix: {prefix[-40:]}')
-            print(f'Context: {context}')
-            print(f'Suffix: {suffix[:40]}')
-
             f.write(content.encode())
         while True:
             found = False
@@ -867,7 +864,7 @@ class PipeLine:
         - Research: Look for any relevant symbols in the codebase, to reference or suggest in the output tasks fields. Only use symbols that you are sure are present in the codebase.
         - Loop: repeat the research step as many times as needed, until you are satisfied about the knowledge and you can proceed to generate the list of tasks.
         - If any of your tasks requires a new function to be implemented, ensure that a task to generate the symbol is included in the output BEFORE the task using the new function.
-        - When all the fields can be populated rigorously and the tasks are finally ordered, output the list of tasks in the requested JSON format. Ensure that you only include tasks defined according to the task format.
+        - When all the fields can be populated rigorously and the tasks are finally ordered, output the list of tasks in the requested JSON format. Ensure that you only include tasks defined according to the task format. Do not include any comments or anything that cannot be parsed as plain JSON.
         """ + prompt
 
         tools = self.llamascope.get_tools()
@@ -1055,8 +1052,93 @@ class PipeLine:
             else:
                 return response['message']['content']
 
+    def explain(self, prompt):
+        print(f"[bold green]Explaining {prompt}[/bold green]")
+        model = 'qwen2.5-coder:32b'
+        messages = [
+                {"role": "system", "content":'You are a C code expert. Assist the user with their questions by using the API provided.\n' + 
+                                'Always answer deterministically. Do not guess function names. If unsure, call the APIs to verify.\n' +
+                                'Work one step at a time. Use the following format:\n' +
+                                'Question: the input question you must answer\n' +
+                                'Thought: you should always think about what to do.\n'
+                                'Do you have enough information to answer, do you know all the ADT and related functions, or do you need to call APIs to complete the analysis?\n' +
+                                'API identification: look for the API in the prompt to find out which tools are available. Identify the one to call.\n' +
+                                'Observation: the result of the action\n' +
+                                '... (this Thought/API identification/Action/Observation sequence can be repeated zero or more times)\n' +
+                                'If you still don\'t know the answer and you are stuck in a loop, try a complete new strategy.\n' + 
+                                'Thought: I finally know the final answer\n' +
+                                'Ensure that I have verified my claims by looking into the implementation of the reachable functions, macros and types involved. For this, I might return to the API identification step.\n' +
+                                'Ensure I am not mentioning any previous Actions in the final answer\n' +
+                                'Final Answer: the final answer to the original user question\n\n\nLet\'s begin!\n'},
+                {"role": "user", "content": prompt}]
+        tools = self.llamascope.get_tools()
+        #tools = self.llamascope.get_tools() + self.web.get_tools()
+        tool_defs = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.args_schema.model_json_schema()
+                }
+            }
+            for t in tools
+        ]
+        while True:
+            print("\n[magenta]Thinking...[/] 🤔💭 ", end='\r')
+            response = ollama.chat( model=model,
+                    messages=messages,
+                    tools=tool_defs,
+                    options={
+                        "temperature": 0.6,
+                        "top_p": 0.9,
+                        "repeat_penalty": 1.1,
+                        "num_ctx": 20000,
+                        "min_p": 0.2
+                    }
+                )
+            message = response.get('message')
+            if message is None:
+                raise ValueError("No message received from the model.")
+            tool_calls = message.get('tool_calls')
+            if not tool_calls:
+                ### Final answer
+                print(f"[bold magenta]👻 Final Answer 👻[/]\n{message['content']}")
+                return
+            for call in tool_calls:
+                if len(messages) > 8:
+                    if (messages[-1]['content'] == messages[-5]['content'] and
+                        messages[-3]['content'] == messages[-7]['content']):
+                        messages[-1] = {'role':'tool', 'name': call.function.name, 'content': """
+                                  Hey, it looks like you have been calling the same API for a while.
+                                  Are you sure this is actually the right place to look for the information you need?
+                                  Rethink your life choices, agent. You have been warned.
+                                  Now try again taking a different strategy.
+                                  """}
+                        print('\n😵😵😵                                      ')
+                if call.function.name in [x.name for x in self.llamascope.get_tools()]:
+                    print("[cyan]Reading code...[/] ⚙️                    ", end = '\r')
+                    result = self.llamascope.handle_tool_call(call)
+                elif call.function.name in [x.name for x in self.web.get_tools()]:
+                    print("\n[green]Browsing the internet...[/] 🌐🌐🌐     ", end='\r')
+                    result = self.web.handle_tool_call(call)
+                else:
+                    messages += [{"role": "tool", "name": call.function.name, "content": "Tool not found."}]
+                    continue
+                messages += [{"role": "tool", "name": call.function.name, "content": result}]
     def run(self, prompt):
+        if '@explain' in prompt:
+            self.explain(prompt.replace('@explain', ''))
+            #print("[magenta]Ctrl + C to finish.[/magenta]")
+            #while True:
+            #    try:
+            #        time.sleep(1000)
+            #    except KeyboardInterrupt:
+            #        break
+            return
+
         if '@research' in prompt:
+            print(f"[bold green]Researching {prompt}[/bold green]")
             try:
                 expanded_prompt = self.call_prompt_agent(prompt)
             except ValueError as e:
@@ -1068,9 +1150,10 @@ class PipeLine:
             expanded_prompt = prompt
         patches = []
         error_retry = 0
+        print(f"[bold green]Generating a list of tasks based on prompt.[/bold green]")
         while len(patches) == 0:
             try:
-                print('[green]Tasking...[/]  ✅                           ', end='\r' )
+                print('[green]Thinking about tasks...[/]  ✅                           ', end='\r' )
                 tasks = self.call_task_agent(expanded_prompt)
             except ValueError as e:
                 print("Failed to parse task list:", e)

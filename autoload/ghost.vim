@@ -20,7 +20,7 @@ function! ghost#Run() abort
 
   " Save current window to return to after starting the terminal job
   let l:prev_win = win_getid()
-  let l:split_width = 50
+  let l:split_width = 80
   " let l:old_splitbelow = &splitbelow
   " set splitbelow
   let l:old_splitright = &splitright
@@ -40,7 +40,8 @@ function! ghost#Run() abort
   let &splitright = l:old_splitright
 
   " Return to original window
-  call win_gotoid(l:prev_win)
+  " call win_gotoid(l:prev_win)
+  call win_gotoid(l:ghost_win)
 endfunction
 
 function! ghost#Accept() abort
@@ -70,11 +71,10 @@ endfunction
 function! ghost#Reject() abort
     " Reject the changes from the ghost files
     " Close the right buffer
-    echom 'Rejecting changes...'
     let l:ghost_path = '.ghost/' . expand('%')
     silent! execute 'wincmd l'
     silent! execute 'bwipeout!'
-    echom 'Changes rejected.'
+    echom 'No changes applied.'
 endfunction
   
 function! ghost#ChangedFiles() abort
@@ -130,11 +130,6 @@ function! ghost#PrevDiff() abort
 endfunction
 
 function! ghost#OnExit(job, exit_code) abort
-  " Get terminal buffer from job and close it
-  let l:bufnr = ch_getbufnr(a:job, 'out')
-  if l:bufnr != -1 && bufexists(l:bufnr)
-    silent! execute 'bwipeout! ' . l:bufnr
-  endif
   " Find mirror file to the one open in the current buffer in
   " ./.ghost/path/to/file 
   let l:ghost_path = '.ghost/' . expand('%')
@@ -148,6 +143,11 @@ function! ghost#OnExit(job, exit_code) abort
       call ghost#Reject()
       return
   else
+      " Get terminal buffer from job and close it
+      let l:bufnr = ch_getbufnr(a:job, 'out')
+      if l:bufnr != -1 && bufexists(l:bufnr)
+        silent! execute 'bwipeout! ' . l:bufnr
+      endif
       " if the current buffer is in the list, the diff is already on the screen.
       if index(l:files, expand('%')) != -1
           return
