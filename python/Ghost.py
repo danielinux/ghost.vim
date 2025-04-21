@@ -1367,7 +1367,6 @@ class PipeLine:
         else:
             return []
 
-        #response_insert = self.call_fim(prefix, suffix, context, file, line, task)
         response_insert = self.call_chatcoder(prefix, suffix, context, file, line, task)
 
         if response_insert:
@@ -1463,105 +1462,6 @@ class PipeLine:
                         break
                 if not found_function:
                     print("[bold yellow]FIM reply no valid symbol found.[/]")
-                    complete = True
-            if not complete:
-                prefix += result
-
-        try:
-            patch = { "path" : file,
-                    "line" : line,
-                    "adding" : result.strip(),
-                    "removing" : ""
-                     }
-
-        except Exception as e:
-            print(f"[bold red][FIM Error][/] {e}")
-        return patch
-
-    def call_fim(self, prefix: str, suffix: str, context: str, file: str, line: int, task: dict) -> str:
-        model = "qwen2.5-coder:32b"
-        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        url = f"{host}/api/generate"
-        # Sanitize and format context
-        sanitized_context = context.replace('/*', '').replace('*/', '').replace('//', '')
-        rules = self.get_rules('coding')
-        if len(rules) > 0:
-            rules = '\nHere are some mandatory rules to follow:\n' + rules + '\n'
-
-        fim_comment_block = f"/*\nContext:\n{sanitized_context}\n\nGoal:\n{task['details']}\n\n"
-        fim_comment_block += rules
-        fim_comment_block += '\n*/\n'
-
-
-        result = ''
-        complete = False
-        found_function = False
-        print(f'[bold yellow] 👻 Crafting Code 👻: {file}:{str(line)}[/]')
-        print(f'[yellow]📎 Context len: prefix {str(len(prefix))} B, suffix {str(len(suffix))} B[/]')
-
-        # VERBOSE
-        #print(f'prefix:\n {prefix}')
-
-        while not complete:
-            # Construct Qwen2.5 FIM prompt
-            fim_prompt = f"<|fim_prefix|>{prefix}\n{fim_comment_block}<|fim_suffix|>{suffix}<|fim_middle|>"
-            payload = {
-                "model": model,
-                "prompt": fim_prompt,
-                "options": {
-                    "temperature": 0.05,
-                    "top_p": 0.8,
-                    "repeat_penalty": 1.1,
-                    "num_ctx": 32768,
-                    "num_predict": 16384,
-                    "min_p": 0.2
-                },
-                "stream": False,
-                "raw": True
-            }
-            #print(f'[magenta]{fim_comment_block}\n[/]')
-            try:
-                response = requests.post(url, json=payload)
-                response.raise_for_status()
-                result += response.json().get("response", "")
-                if '```' in result:
-                    result = result.split('```')[0]
-                print("[yellow]Received FIM response...[/]")
-            except requests.RequestException as e:
-                print(f"[FIM Error] {e}")
-                return []
-
-            # If there is an incomplete function in the generation, call again
-            if not complete:
-                try:
-                    tree = ExtendedLlamaScope.parser.parse(result.encode())
-                    root = tree.root_node
-                except Exception as e:
-                    print(f"[bold red][Parser Error][/] {e}")
-
-
-                print("Parsing reply: ", result)
-                print(" ".join(c.type for c in root.children))
-
-                for node in root.children:
-                    if (node.type == "function_definition" or
-                        node.type == "declaration" or
-                        node.type == "struct_specifier" or
-                        node.type == "enum_specifier" or
-                        node.type == "union_specifier" or
-                        node.type == "type_definition" or
-                        node.type == "preproc_def" or
-                        node.type == "preproc_function_def"):
-                        found_function = True
-                        # Check if this function node spans the entire input
-                        if node.end_byte <= len(result.encode()):
-                            print(f"[bold green]FIM replied with complete {node.type} ✅ [/]")
-                            complete = True
-                            result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
-                            print(f"[cyan]{result}[/]")
-                        break
-                if not found_function:
-                    print("[bold yellow]FIM reply no function found[/]")
                     complete = True
             if not complete:
                 prefix += result
