@@ -1,6 +1,8 @@
 task_list = [
     {"type": "FunctionGeneration", "description": "Create a new function based on a task description and context. Specify arguments and return value.", "agent": "fim"},
     {"type": "FunctionRefactor", "description": "Modify an existing function to change its logic, structure, or dependencies.", "agent": "fim"},
+    {"type": "TypeRefactor", "description": "Modify an existing type to change its fields", "agent": "fim"},
+    {"type": "MacroRefactor", "description": "Modify an existing macro change its logic or value.", "agent": "fim"},
     {"type": "TypeDefinition", "description": "Define a new struct, enum, or typedef to support new data abstractions.", "agent": "fim"},
     {"type": "StubCompletion", "description": "Complete the body of a stub function currently defined with empty braces.", "agent": "fim"},
     {"type": "SymbolImplementation", "description": "Provide the implementation of a declared but undefined function or symbol.", "agent": "fim"},
