@@ -76,16 +76,16 @@ function! ghost#Reject() abort
     silent! execute 'bwipeout!'
     echom 'No changes applied.'
 endfunction
-  
+
 function! ghost#ChangedFiles() abort
     " Create a list of all diffs
     let l:diff = system('diff -ru . .ghost | grep -E "^\\-\\-\\-" | cut -d " " -f 2 | sed -e "s/\t.*//"')
     let l:diffs = split(l:diff, '\n')
     let l:files = []
     " echom 'diff:' . len(l:diffs)
-  
+
     for line in l:diffs
-        echom 'diff: ' . line
+        " echom 'diff: ' . line
         if !empty(line)
             call add(l:files, line)
         endif
@@ -97,18 +97,22 @@ function! ghost#NextDiff() abort
     " Move to the next diff in the list of changed files
     let l:files = ghost#ChangedFiles()
     " echom 'files:' . len(l:files)
-    
+
 
     if len(l:files) > 1
         let l:index = index(l:files, expand('%'))
-        if l:index != -1 && l:index < len(l:files) - 1
-            let l:ghost_file = '.ghost/' . l:files[l:index - 1]
-            let l:orig_file = '.ghost/' . l:files[l:index - 1]
-            silent! execute 'wincmd l | e ' . l:ghost_file
-            silent! execute 'diffthis'
-            silent! execute 'wincmd h | e ' . l:orig_file 
-            silent! execute 'diffthis | wincmd l'
+        if l:index == -1 || l:index >= len(l:files)
+            let l:index = 0
         endif
+        let l:ghost_file = '.ghost/' . l:files[l:index - 1][2:]
+        let l:orig_file = l:files[l:index - 1]
+        echom  'files ' . l:orig_file . ' vs ' . l:ghost_file
+        silent! execute 'wincmd l'
+        silent! execute 'e ' . l:ghost_file
+        silent! execute 'diffthis'
+        silent! execute 'wincmd h'
+        silent! execute 'e ' . l:orig_file
+        silent! execute 'diffthis | wincmd l'
     endif
 endfunction
 
@@ -118,20 +122,24 @@ function! ghost#PrevDiff() abort
 
     if len(l:files) > 1
         let l:index = index(l:files, expand('%'))
-        if l:index != -1 && l:index > 0
-            let l:ghost_file = '.ghost/' . l:files[l:index - 1]
-            let l:orig_file = '.ghost/' . l:files[l:index - 1]
-            silent! execute 'wincmd l | e ' . l:ghost_file
-            silent! execute 'diffthis'
-            silent! execute 'wincmd h | e ' . l:orig_file 
-            silent! execute 'diffthis | wincmd l'
+        if l:index <= 0
+            let l:index = len(l:files) - 1
         endif
+        let l:ghost_file = '.ghost/' . l:files[l:index - 1][2:]
+        let l:orig_file = l:files[l:index - 1]
+        silent! execute 'wincmd l'
+        silent! execute 'e ' . l:ghost_file
+        silent! execute 'diffthis'
+        silent! execute 'wincmd h'
+        silent! execute 'e ' . l:orig_file
+        silent! execute 'diffthis'
+        silent! execute 'wincmd l'
     endif
 endfunction
 
 function! ghost#OnExit(job, exit_code) abort
   " Find mirror file to the one open in the current buffer in
-  " ./.ghost/path/to/file 
+  " ./.ghost/path/to/file
   let l:ghost_path = '.ghost/' . expand('%')
   echom l:ghost_path
   execute 'diffthis | set splitright | vnew ' . l:ghost_path . '| diffthis'
@@ -152,7 +160,7 @@ function! ghost#OnExit(job, exit_code) abort
       if index(l:files, expand('%')) != -1
           return
       endif
-      
+
       " Open the first file in the list and switch to it
       let l:first_ghost_file = '.ghost/' . l:files[0]
       let l:first_orig_file = l:files[0]
@@ -160,7 +168,7 @@ function! ghost#OnExit(job, exit_code) abort
       silent! execute 'e ' . l:first_ghost_file
       silent! execute 'diffthis'
       silent! execute 'wincmd h'
-      silent! execute 'e ' . l:first_orig_file 
+      silent! execute 'e ' . l:first_orig_file
       silent! execute 'diffthis | wincmd l'
   endif
 endfunction

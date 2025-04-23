@@ -1197,9 +1197,6 @@ class PipeLine:
                 print("Failed to parse task list:", e)
                 return
 
-
-
-
             print(f"Executing {str(len(tasks))} tasks...")
             for task in tasks:
                 task_type = task.get("type")
@@ -1297,7 +1294,31 @@ class PipeLine:
                     f.write(f'/* {file_path} */ ')
             with open(file_path, 'r') as f:
                 content = f.read()
-                line = content.count('\n')
+
+            def find_symbol_insert_line(lines):
+                # Stack of #if / #ifdef / #ifndef to match against #endif
+                conditional_stack = []
+                last_endif_line = None
+
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+
+                    if re.match(r'#\s*ifn?def\b', stripped) or re.match(r'#\s*if\b', stripped):
+                        conditional_stack.append(i)
+
+                    elif re.match(r'#\s*endif\b', stripped):
+                        if conditional_stack:
+                            conditional_stack.pop()
+                            last_endif_line = i  # store the last matched #endif
+
+                # If stack is empty → we matched all conditionals → insert after last endif
+                if last_endif_line is not None and not conditional_stack:
+                    return last_endif_line
+
+                # Otherwise, insert at the very end
+                return len(lines)
+
+            line = find_symbol_insert_line(content.splitlines())
             context = ''
             if task['type'] == 'FunctionGeneration':
                 prefix += 'Generate a new function called ' + task['target'] + '\n'
@@ -1341,7 +1362,41 @@ class PipeLine:
             file = file_path
             with open(file_path, 'rb') as f:
                 src = f.read().decode('utf-8', errors='replace')
-                line = src.count('\n')
+            def find_type_insert_line(lines):
+                state = {
+                    "saw_guard": False,
+                    "saw_includes": False,
+                    "saw_defines": False,
+                }
+
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+
+                    # Skip empty lines and comments
+                    if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
+                        continue
+
+                    # Match guard
+                    if '#pragma once' in stripped or re.match(r'#ifndef\s+\w+', stripped):
+                        state["saw_guard"] = True
+                        continue
+
+                    # Match include
+                    if re.match(r'#include\s+[<"].+[>"]', stripped):
+                        state["saw_includes"] = True
+                        continue
+
+                    # Match macro define
+                    if re.match(r'#define\s+\w+', stripped):
+                        state["saw_defines"] = True
+                        continue
+
+                    # If we hit first real declaration (function/type/extern), insert before
+                    if re.match(r'(extern|void|int|char|float|struct|typedef|union)\b', stripped):
+                        return i
+                # Fallback to end of file
+                return len(lines)
+            line = find_type_insert_line(src.splitlines())
         elif task['type'] == 'MacroDefinition':
             sym = self.llamascope.get_symbol(task['target'])
             file = task.get('file')
@@ -1349,6 +1404,27 @@ class PipeLine:
                 context = f'The new macro`{task["target"]}` is not yet defined in the current file. Write it from scratch.'
                 with open(file, 'rb') as f:
                     content = f.read().decode('utf-8', errors='replace')
+
+                def find_macro_insert_line(lines):
+                    for i, line in enumerate(lines):
+                        stripped = line.strip()
+                        # Skip comment blocks or empty lines
+                        if stripped.startswith('//') or stripped.startswith('/*') or stripped == '':
+                            continue
+                        # If we hit the include guard or pragma once, insert after
+                        if '#pragma once' in stripped or re.match(r'#ifndef\s+\w+', stripped):
+                            # Look for the matching #define
+                            for j in range(i+1, min(i+5, len(lines))):
+                                if re.match(r'#define\s+\w+', lines[j].strip()):
+                                    return j + 1  # Insert after #define GUARD
+                            return i + 1  # Fallback
+                        # If we hit real code (struct/typedef/etc), insert above it
+                        if re.match(r'(typedef|struct|enum|union|void|int|char|extern)\b', stripped):
+                            return i
+                    return len(lines)  # Fallback to end if nothing found
+
+
+                line = find_macro_insert_line(content.splitlines())
                 if not '#define' in content:
                     line = 0
                 else:
