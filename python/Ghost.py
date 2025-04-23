@@ -816,6 +816,7 @@ class PipeLine:
         self.llamascope = ExtendedLlamaScope(root_dir)
         print('\n[bold magenta] Llamascope initialized[/]')
         self.web = WebSearch()
+        self.prompt_txt_files = []
 
         docs = False
         if docs:
@@ -1155,6 +1156,7 @@ class PipeLine:
                     continue
                 messages += [{"role": "tool", "name": call.function.name, "content": result}]
     def run(self, prompt):
+        self.prompt_txt_files = []
         if '@explain' in prompt:
             self.explain(prompt.replace('@explain', ''))
             #print("[magenta]Ctrl + C to finish.[/magenta]")
@@ -1168,8 +1170,13 @@ class PipeLine:
         print(f"[bold green]{prompt}[/bold green]")
 
         if '@actions:' not in prompt:
-
-
+            # First agent, analyze the prompt and prepare the actions
+            while '@+' in prompt:
+                idx = prompt.index('@+')
+                file_path = prompt[idx + 2:]
+                with open(file_path, 'r') as f:
+                    file_content = f.read()
+                prompt.replace('@+' + file_path, '\n\n' + file_content)
             try:
                 expanded_prompt = self.call_prompt_agent(prompt)
             except ValueError as e:
@@ -1178,6 +1185,7 @@ class PipeLine:
             expanded_prompt = 'User requested: ' + prompt + '\nI have expanded that request into the following actions:\n\n' + expanded_prompt
 
         else:
+            # Use the provided actions from a file
             try:
                 with open(prompt.replace('@actions:', ''), 'r') as f:
                     expanded_prompt = f.read()

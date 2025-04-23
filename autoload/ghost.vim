@@ -1,49 +1,124 @@
 " autoload/ghost.vim
-
+"
+"
 function! ghost#Run() abort
-  if &modified
-      echom "Buffer has unsaved changes. Please save your changes before summoning ghosts."
-      return
+  call ghost#OpenMultilinePrompt()
+endfunction
+
+function! ghost#MaybeComplete() abort
+  let l:col = col('.') - 1
+  let l:line = getline('.')
+
+  " Get text before the cursor
+  let l:prefix = strpart(l:line, 0, l:col)
+
+  " Match the most recent @+ token before the cursor
+  if l:prefix =~# '@+[[:alnum:]_./-]*$'
+    return "\<C-X>\<C-U>"
   endif
-  " Prompt the user for input text
-  let l:input_text = input("Ghost >>: ")
-  if empty(l:input_text)
+  return "\<Right>"
+endfunction
+
+autocmd FileType ghostprompt inoremap <buffer> <expr> <Right> ghost#MaybeComplete()
+
+function! ghost#SubmitMultilineBuffer() abort
+  let l:script = ghost#FindScriptPath()
+  if empty(l:script)
+    echom "ghost.vim: Could not locate run-ghost.py"
+    return
+  endif
+  let l:ghost_win = getbufvar('%', 'ghost_term_win')
+
+  if empty(l:script) || empty(l:ghost_win)
+    echom "ghost.vim: internal error — missing vars"
     return
   endif
 
-  " Find run-ghost.py in any plugin directory under runtimepath
-  let l:script_path = ghost#FindScriptPath()
-  if empty(l:script_path)
-    echom "ghost.vim: Could not locate run-ghost.py in runtimepath"
-    return
-  endif
+  let l:lines = getline(2, '$')  " skip header
+  let l:input = join(l:lines, "\n")
 
-  " Save current window to return to after starting the terminal job
-  let l:prev_win = win_getid()
-  let l:split_width = 80
-  " let l:old_splitbelow = &splitbelow
-  " set splitbelow
-  let l:old_splitright = &splitright
-  set splitright
+  call win_gotoid(l:ghost_win)
+  echom "SCRIPT: " . l:script
+  echom "INPUT: " . l:input
 
-  " Open vertical terminal split on the right
-  vsplit
-  wincmd l
-  let l:ghost_win = win_getid()
-  execute 'vertical resize' . l:split_width
-  call term_start(['python3', '-u', l:script_path, l:input_text], {
+  call term_start(['python3', '-u', l:script, l:input], {
         \ 'curwin': v:true,
         \ 'exit_cb': function('ghost#OnExit') })
 
-  " Restore 'splitbelow' setting
-  " let &splitbelow = l:old_splitbelow
-  let &splitright = l:old_splitright
-
-  " Return to original window
-  " call win_gotoid(l:prev_win)
-  call win_gotoid(l:ghost_win)
+  "bwipeout!
 endfunction
 
+function! ghost#OpenMultilinePrompt() abort
+  let l:script = ghost#FindScriptPath()
+  if empty(l:script)
+    echom "ghost.vim: Could not locate run-ghost.py"
+    return
+  endif
+
+  let l:split_width = 80
+  let l:old_splitright = &splitright
+  set splitright
+  let l:prev_win = win_getid()
+  vsplit
+  wincmd l
+  let l:ghost_win = win_getid()
+  execute 'vertical resize ' . l:split_width
+  "call win_gotoid(l:prev_win)
+
+  enew
+  setlocal buftype=nofile bufhidden=wipe noswapfile
+  setlocal filetype=ghostprompt
+  setlocal completefunc=ghost#PathComplete
+  setlocal modifiable nowrap
+
+  let b:ghost_script = l:script
+  let b:ghost_term_win = l:ghost_win
+
+  echom 'Ghost prompt. Use :GhostSubmit to submit your prompt.'
+
+  call append(0, 'Prompt:')
+  call cursor(2, 1)
+  execute 'command! -buffer GhostSubmit call ghost#SubmitMultilineBuffer()'
+  startinsert
+endfunction
+
+
+function! ghost#PathComplete(findstart, base) abort
+  if a:findstart
+    " Find the position of @+ that starts the token
+    let l:line = getline('.')
+    let l:col = col('.') - 1
+
+    " Work backward from cursor to locate "@+"
+    let l:start = l:col
+    while l:start >= 2
+      if strpart(l:line, l:start - 2, 2) ==# '@+'
+        return l:start - 2
+      endif
+      let l:start -= 1
+    endwhile
+
+    return -1  " Not inside @+ expression
+  else
+    " Strip off @+ from the text we're completing
+    let l:rawpath = substitute(a:base, '^@+', '', '')
+
+    " Use glob() to match files and directories
+    let l:matches = glob(l:rawpath . '*', 0, 1)
+    let l:items = []
+
+    for path in l:matches
+      let l:isdir = isdirectory(path)
+      let l:display = fnamemodify(path, ':t') . (l:isdir ? '/' : '')
+      let l:insert = '@+' . path . (l:isdir ? '/' : '')
+      call add(l:items, {'word': l:insert, 'abbr': l:display})
+    endfor
+
+    return l:items
+  endif
+endfunction
+
+"
 function! ghost#Accept() abort
   echom 'Accepting changes...'
     " Accept the changes from the ghost files
