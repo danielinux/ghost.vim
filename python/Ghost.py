@@ -422,6 +422,7 @@ class CodeLookup:
             content = content[:max_]
         return content.decode(errors='replace')
 
+
     def extract_symbols(self, source_code, file_path):
         """Extract function definitions using tree-sitter."""
         tree = self.parser.parse(source_code.encode("utf-8"))
@@ -801,6 +802,17 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             print(f"[Tree-sitter error] {e}")
             return [], ''
 
+    def find_first_code_line(self, path):
+        with open(path, 'rb') as f:
+            content = f.read()
+        tree = self.parser.parse(content)
+        root = tree.root_node
+        for node in root.children:
+            if node.type == 'comment':
+                continue
+            return self.byte_to_line(path, node.start_byte) + 1
+        return 0
+
     def byte_to_line(self, path: str, byte_offset: int) -> int:
         try:
             with open(path, 'rb') as f:
@@ -1173,10 +1185,12 @@ class PipeLine:
             # First agent, analyze the prompt and prepare the actions
             while '@+' in prompt:
                 idx = prompt.index('@+')
-                file_path = prompt[idx + 2:]
+                file_name = prompt[idx + 2:].split(' ')[0]
+                file_path = os.path.join(os.getcwd(), "..", file_name)
+
                 with open(file_path, 'r') as f:
                     file_content = f.read()
-                prompt.replace('@+' + file_path, '\n\n' + file_content)
+                prompt = prompt[0:idx] + '\n\n' + file_content + prompt[idx + len(file_name):]
             try:
                 expanded_prompt = self.call_prompt_agent(prompt)
             except ValueError as e:
@@ -1640,6 +1654,34 @@ class PipeLine:
                     }
                 ]
             return patches
+        elif task['type'] == 'PlaceIncludeGuards':
+            path = task["file"]
+            macro = task["target"]
+
+            with open(path, "r", encoding="utf-8") as f:
+                n_lines = len(f.readlines())
+
+            # Identify end of leading comment block (// or /* ... */)
+            insert_index = self.llamascope.find_first_code_line(path) - 1
+
+            # Construct guard block
+            header = str(f"#ifndef {macro}\n#define {macro}\n\n")
+            footer = str(f"\n#endif // {macro}\n")
+
+            patch_header = {
+                    "path": path,
+                    "line": insert_index,
+                    "adding": header,
+                    "removing": ""
+            }
+            patch_footer = {
+                    "path": path,
+                    "line": n_lines + 3,
+                    "adding": footer,
+                    "removing": ""
+                }
+            return [patch_footer, patch_header]
+
         elif task['type'] == 'IncludeFix':
             if not '#include' in task['target']:
                 return [{"error": "invalid 'IncludeFix' target: " + task['target' ]}]
