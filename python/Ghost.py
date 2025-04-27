@@ -256,6 +256,9 @@ class Workspace(Tool):
         """Write text to a file with control over position and mode (rewrite, insert, or append)."""
         """Write content to a file. Supports append, insert or replace modes."""
         try:
+            dirname = os.path.dirname(path)
+            if (len(dirname) > 0) and not os.path.exists(dirname):
+                os.makedirs(dirname, exist_ok = True)
             with open(path, 'rb+' if os.path.exists(path) else 'wb+') as f:
                 f.seek(pos)
                 if mode == 'rewrite':
@@ -497,6 +500,9 @@ class CodeLookup:
 
         if file not in self.files:
             self.files.append(file)
+        dirname = os.path.dirname(file)
+        if (len(dirname) > 0) and not os.path.exists(dirname):
+            os.makedirs(dirname, exist_ok = True)
         with open(file, 'wb') as f:
             content = prefix + '\n'  + context + suffix
             f.write(content.encode())
@@ -942,7 +948,7 @@ class ExtendedLlamaScope(CodeLookup, Tool):
         for node in root.children:
             if node.type == 'comment':
                 continue
-            return self.byte_to_line(path, node.start_byte) + 1
+            return self.byte_to_line(path, node.start_byte)
         return 0
 
     def byte_to_line(self, path: str, byte_offset: int) -> int:
@@ -1168,17 +1174,17 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                             print(f"\n[bold yellow]Analyzing target device registers...[/] 🔬📖              ", end = '\r')
                             result = self.svdtool.handle_tool_call(call)
                     except Exception as e:
-                        messages+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
+                        self.task_agent_msgs+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
                         continue
                     if not result:
                         result = ''
-                    messages+=[{"role": "tool", "name": call.function.name, "content": result}]
+                    self.task_agent_msgs+=[{"role": "tool", "name": call.function.name, "content": result}]
                     #print(" Tool Call Output:")
                     #print(messages[-1])
-                if len(messages) > 8:
-                    if (messages[-1]['content'] == messages[-5]['content'] and
-                        messages[-3]['content'] == messages[-7]['content']):
-                        messages[-1] = {'role':'tool', 'name': call.function.name, 'content': """
+                if len(self.task_agent_msgs) > 8:
+                    if (self.task_agent_msgs[-1]['content'] == self.task_agent_msgs[-5]['content'] and
+                        self.task_agent_msgs[-3]['content'] == self.task_agent_msgs[-7]['content']):
+                        self.task_agent_msgs[-1] = {'role':'tool', 'name': call.function.name, 'content': """
                                   Hey, it looks like you have been calling the same API for a while.
                                   Are you sure this is actually the right place to look for the information you need?
                                   Rethink your life choices, agent. You have been warned.
@@ -1199,7 +1205,8 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                     raise ValueError(f"Invalid JSON returned by TaskAgent: {e} Raw content: {response['message']['content']}")
                 break
 
-    def call_prompt_agent(self, prompt: str, model="qwen2.5-coder:32b"):
+    def call_prompt_agent(self, prompt: str, model='qwen2.5-coder:32b'):
+                          # model="MFDoom/deepseek-r1-tool-calling:70b"):
         rules = self.get_rules('design')
         if len(rules) > 0:
             rules = '\nHere are some mandatory rules to follow:\n' + rules + '\n'
@@ -1266,7 +1273,7 @@ One of the tasks previously scheduled has failed. Please review the task and re-
         ---
 
         🛑 Do not invent or assume anything. Only output verified information.
-        Your final response must contain **only the TODO list**, with no commentary or explanations.
+        Your final response must contain **only the TODO list**, with no commentary or explanations. Omit thoughts.
 
         ---
 
@@ -1345,7 +1352,10 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                                   """}
                         print('~~~ 😵😵😵 I\'m lost. ~~~' + ' ' * 200, end = '\r')
             else:
-                return response['message']['content']
+                msg_content = response['message']['content']
+                # Remove Deepseek CoT <think> </think>
+                msg_content = re.sub(r'<think>.*?</think>', '', msg_content)
+                return msg_content
 
     def explain(self, prompt):
         print(f"[bold yellow]{prompt}[/]")
@@ -1576,30 +1586,36 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                         if not tp.get('line'):
                             task.update({'error': 'No relevant line could be identified by coder in file'})
                             break
-                    tasks.remove(task)
-                    break
                 except Exception as err:
                     task.update({'error':str(err)})
                     break
 
 
-            # In-place sorting for patching in the right order
-            task_patches.sort(key=lambda p: (p['path'], -p['line']))
+                for t in task_patches:
+                    if t.get('error'):
+                        task.update({'error':t['error']})
+                        continue
 
-            for patch in task_patches:
-                adding = patch.get('adding', '')
-                removing = patch.get('removing', '')
-                add_lines = adding.count('\n')
-                remove_lines = removing.count('\n')
-                if len(adding) > 0 and not adding.endswith('\n'):
-                    add_lines += 1
-                if len(removing) > 0 and not removing.endswith('\n'):
-                    remove_lines += 1
-                if add_lines == 0 and remove_lines == 0:
-                    continue
-                print(f"Patching {patch['path']}:{str(patch['line'])}:\n" + str(add_lines) + '+, ' + str(remove_lines) + '-\n')
-                self.llamascope.ghost_apply(patch)
-                patches.append(patch)
+                # In-place sorting for patching in the right order
+                task_patches.sort(key=lambda p: (p['path'], -p['line']))
+
+                for patch in task_patches:
+                    adding = patch.get('adding', '')
+                    removing = patch.get('removing', '')
+                    add_lines = adding.count('\n')
+                    remove_lines = removing.count('\n')
+                    if len(adding) > 0 and not adding.endswith('\n'):
+                        add_lines += 1
+                    if len(removing) > 0 and not removing.endswith('\n'):
+                        remove_lines += 1
+                    if add_lines == 0 and remove_lines == 0:
+                        print("Skipping empty patch...")
+                        continue
+                    print(f"[bold green]Patching {patch['path']}:{str(patch['line'])}[/]:\n" + str(add_lines) + '+, ' + str(remove_lines) + '-\n')
+                    self.llamascope.ghost_apply(patch)
+                    patches.append(patch)
+                print("🩹 This task generated " + str(len(task_patches)) + "patches 🩹")
+                tasks.remove(task)
 
         print("🩹 Total patches: 🩹" + str(len(patches)))
         response = { 'role': 'assistant', 'message': {'content': {'patches': patches} } }
@@ -1659,6 +1675,9 @@ One of the tasks previously scheduled has failed. Please review the task and re-
         if task['type'] in ('FunctionGeneration', 'SymbolImplementation'):
             file_path = task.get('file')
             if not os.path.exists(file_path):
+                dirname = os.path.dirname(file_path)
+                if (len(dirname) > 0) and not os.path.exists(dirname):
+                    os.makedirs(dirname, exist_ok = True)
                 with open(file_path, 'w') as f:
                     f.write(f'/* {file_path} */ ')
             with open(file_path, 'r') as f:
@@ -1701,6 +1720,9 @@ One of the tasks previously scheduled has failed. Please review the task and re-
         elif task['type'] == 'TypeDefinition':
             file_path = task.get('file')
             if not os.path.exists(file_path):
+                dirname = os.path.dirname(file_path)
+                if (len(dirname) > 0) and not os.path.exists(dirname):
+                    os.makedirs(dirname, exist_ok = True)
                 with open(file_path, 'w') as f:
                     f.write(f'/* {file_path} */ ')
             with open(file_path, 'r') as f:
@@ -1754,7 +1776,7 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                 context = f'The new macro`{task["target"]}` is not yet defined in the current file. Write it from scratch.'
                 with open(file, 'rb') as f:
                     content = f.read().decode('utf-8', errors='replace')
-                line = self.llamascope.find_first_code_line(file) - 1
+                line = self.llamascope.find_first_code_line(file)
             else:
                 line = sym['line']
                 with open(file, 'rb') as f:
@@ -1785,7 +1807,6 @@ One of the tasks previously scheduled has failed. Please review the task and re-
             if task['target'] not in self.refs:
                 print(f'[bold green]➕ Adding new reference for {task["target"]}[/]')
                 self.refs[task['target']] = code
-
         return [response_insert]
 
     def call_chatcoder(self, prefix: str, suffix: str, context: str, file: str, line: int, task: dict) -> str:
@@ -1970,6 +1991,9 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                 ]
             return patches
         elif task['type'] == 'FileCreate':
+            dirname = os.path.dirname(task['file'])
+            if (len(dirname) > 0) and not os.path.exists(dirname):
+                os.makedirs(dirname, exist_ok = True)
             with open(task['file'], 'w') as f:
                 f.close()
             patches = [
@@ -1988,7 +2012,7 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                 n_lines = len(f.readlines())
 
             # Identify end of leading comment block (// or /* ... */)
-            insert_index = self.llamascope.find_first_code_line(path) - 1
+            insert_index = self.llamascope.find_first_code_line(path)
 
             # Construct guard block
             header = str(f"#ifndef {macro}\n#define {macro}\n\n")
@@ -2021,6 +2045,9 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                 else:
                     line = 0
             except FileNotFoundError:
+                dirname = os.path.dirname(file)
+                if (len(dirname) > 0) and not os.path.exists(dirname):
+                    os.makedirs(dirname, exist_ok = True)
                 with open(file, 'wb') as f:
                     f.write(f'/* {file} */\n'.encode('utf-8'))
                 line = 1
