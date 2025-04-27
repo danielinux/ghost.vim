@@ -15,9 +15,5 @@ if !has('terminal') && !has('nvim')
 endif
 
 " Define the :GhostRun command to trigger the autoload function
-command! -nargs=0 GhostRun call ghost#Run()
-command! -nargs=0 GhostAccept call ghost#Accept()
-command! -nargs=0 GhostReject call ghost#Reject()
-command! -nargs=0 GhostPrev call ghost#PrevDiff()
-command! -nargs=0 GhostNext call ghost#NextDiff()
+command! -range  GhostRun <line1>,<line2>call ghost#Run()
 

@@ -1,14 +1,34 @@
 " autoload/ghost.vim
 "
 "
-function! ghost#Run() abort
-  call ghost#OpenMultilinePrompt()
+function! ghost#Run(...) range abort
+  if a:firstline != a:lastline
+    " Selection case
+    let l:abs_path = expand('%:p')
+    let l:cwd = getcwd()
+
+    " Ensure file is inside project root
+    if l:abs_path[:len(l:cwd)-1] !=# l:cwd
+      echom "Ghost error: Selection must be in the current project directory."
+      return
+    endif
+
+    " Get relative path
+    let l:rel_path = substitute(l:abs_path, l:cwd . '/', '', '')
+
+    let l:selection = getline(a:firstline, a:lastline)
+    call ghost#OpenMultilinePrompt(l:selection, l:rel_path, a:firstline)
+  else
+    " No selection
+    call ghost#OpenMultilinePrompt()
+  endif
 endfunction
+
+
 
 function! ghost#MaybeComplete() abort
   let l:col = col('.') - 1
   let l:line = getline('.')
-
   " Get text before the cursor
   let l:prefix = strpart(l:line, 0, l:col)
 
@@ -34,12 +54,12 @@ function! ghost#SubmitMultilineBuffer() abort
     return
   endif
 
-  let l:lines = getline(2, '$')  " skip header
+  let l:lines = getline(1, '$')  " skip header
   let l:input = join(l:lines, "\n")
 
   call win_gotoid(l:ghost_win)
-  echom "SCRIPT: " . l:script
-  echom "INPUT: " . l:input
+  " store buffer in .ghost_prompt to reuse later
+  call writefile(l:lines, '.ghost_prompt')
 
   call term_start(['python3', '-u', l:script, l:input], {
         \ 'curwin': v:true,
@@ -48,7 +68,7 @@ function! ghost#SubmitMultilineBuffer() abort
   "bwipeout!
 endfunction
 
-function! ghost#OpenMultilinePrompt() abort
+function! ghost#OpenMultilinePrompt(...) abort
   let l:script = ghost#FindScriptPath()
   if empty(l:script)
     echom "ghost.vim: Could not locate run-ghost.py"
@@ -73,11 +93,23 @@ function! ghost#OpenMultilinePrompt() abort
 
   let b:ghost_script = l:script
   let b:ghost_term_win = l:ghost_win
+  let l:startline = 1
+  if a:0 >= 2
+      let b:ghost_source_file = a:2
+      let b:ghost_source_line = a:3
+      let b:ghost_source_len = len(a:1)
+      let l:startline = 2
+      let l:tag = '@section:' . b:ghost_source_file . ':' . b:ghost_source_line . ':' . b:ghost_source_len
+      echom l:tag
+      call setline(1, l:tag)
+  endif
 
-  echom 'Ghost prompt. Use :GhostSubmit to submit your prompt.'
-
-  call append(0, 'Prompt:')
-  call cursor(2, 1)
+  " restore from .ghost_prompt if present
+  if filereadable('.ghost_prompt')
+    call readfile('.ghost_prompt', 0)
+    let l:lines = readfile('.ghost_prompt', 0)
+    call setline(l:startline, l:lines)
+  endif
   execute 'command! -buffer GhostSubmit call ghost#SubmitMultilineBuffer()'
   startinsert
 endfunction
@@ -121,6 +153,10 @@ endfunction
 "
 function! ghost#Accept() abort
   echom 'Accepting changes...'
+  delcommand GhostAccept
+  delcommand GhostReject
+  delcommand GhostPrev
+  delcommand GhostNext
     " Accept the changes from the ghost files
     " copy the contents of the ghost file to the original file
     " and delete the ghost file
@@ -144,17 +180,21 @@ function! ghost#Accept() abort
 endfunction
 
 function! ghost#Reject() abort
-    " Reject the changes from the ghost files
-    " Close the right buffer
-    let l:ghost_path = '.ghost/' . expand('%')
-    silent! execute 'wincmd l'
-    silent! execute 'bwipeout!'
-    echom 'No changes applied.'
+  delcommand GhostAccept
+  delcommand GhostReject
+  delcommand GhostPrev
+  delcommand GhostNext
+  " Reject the changes from the ghost files
+  " Close the right buffer
+  let l:ghost_path = '.ghost/' . expand('%')
+  silent! execute 'wincmd l'
+  silent! execute 'bwipeout!'
+  echom 'No changes applied.'
 endfunction
 
 function! ghost#ChangedFiles() abort
     " Create a list of all diffs
-    let l:diff = system('diff -ru . .ghost | grep -E "^\\-\\-\\-" | cut -d " " -f 2 | sed -e "s/\t.*//"')
+    let l:diff = system('diff -ru --unidirectional-new-file . .ghost | grep -E "^\\-\\-\\-" | cut -d " " -f 2 | sed -e "s/\t.*//"')
     let l:diffs = split(l:diff, '\n')
     let l:files = []
     " echom 'diff:' . len(l:diffs)
@@ -226,6 +266,17 @@ function! ghost#OnExit(job, exit_code) abort
       call ghost#Reject()
       return
   else
+      command! -nargs=0 GhostAccept call ghost#Accept()
+      command! -nargs=0 GhostReject call ghost#Reject()
+      command! -nargs=0 GhostPrev call ghost#PrevDiff()
+      command! -nargs=0 GhostNext call ghost#NextDiff()
+      " Wait for user to press ENTER
+      call input('Press ENTER to show the proposed changes')
+      if v:char == "\<Esc>"
+          call ghost#Reject()
+          return
+      endif
+
       " Get terminal buffer from job and close it
       let l:bufnr = ch_getbufnr(a:job, 'out')
       if l:bufnr != -1 && bufexists(l:bufnr)
