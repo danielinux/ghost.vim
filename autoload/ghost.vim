@@ -110,6 +110,7 @@ function! ghost#OpenMultilinePrompt(...) abort
     let l:lines = readfile('.ghost_prompt', 0)
     call setline(l:startline, l:lines)
   endif
+  set spell wrap linebreak nolist nonumber
   execute 'command! -buffer GhostSubmit call ghost#SubmitMultilineBuffer()'
   startinsert
 endfunction

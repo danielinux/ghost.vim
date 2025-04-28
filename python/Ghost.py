@@ -959,6 +959,90 @@ class ExtendedLlamaScope(CodeLookup, Tool):
         except Exception:
             return 0
 
+class Agent:
+    def __init__(self, pipeline, model='qwen2.5-coder:32b',
+                 system='You are a helpful assistant',
+                 tools = [],
+                 options = { }
+                 ):
+        self.pipeline = pipeline
+        self.model = model
+        self.system = system
+        self.tools = tools or []
+        self.options = options
+        self.messages = [{'role': 'system', 'content': self.system}]
+        toolset = []
+        for t in tools:
+            toolset += t.get_tools()
+        self.tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.args_schema.model_json_schema()
+                }
+            }
+            for t in toolset
+        ]
+
+    def forget(self):
+        self.messages = [{'role': 'system', 'content': self.system}]
+
+    def run(self, prompt):
+        while True:
+            self.messages.append({'role': 'user', 'content': prompt})
+            print("\n[green]Thinking...[/] 🤔💭 ", end = '\r')
+            response = ollama.chat(
+                model=self.model,
+                messages=self.messages,
+                tools=self.tools,
+                options= self.options
+            )
+            if 'tool_calls' in response['message']:
+                for call in response['message']['tool_calls']:
+                    #print(f"[bold green]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
+                    try:
+                        if call.function.name in [x.name for x in self.pipeline.llamascope.get_tools()]:
+                            print("[green]Reading code...[/] ⚙️                                               ", end="\r" )
+                            result = self.pipeline.llamascope.handle_tool_call(call)
+                        elif call.function.name in [x.name for x in self.pipeline.svdtool.get_tools()]:
+                            print(f"\n[bold yellow]Analyzing target device registers...[/] 🔬📖              ", end = '\r')
+                            result = self.pipeline.svdtool.handle_tool_call(call)
+                        elif call.function.name in [x.name for x in self.pipeline.doc.get_tools()]:
+                            print("\n[cyan]Reading books...[/]    📖🤓                ", end = '\r')
+                            #print(f"[bold cyan]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
+                            result = self.doc.handle_tool_call(call)
+                    except Exception as e:
+                        self.messages+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
+                        continue
+                    if not result:
+                        result = ''
+                    self.messages+=[{"role": "tool", "name": call.function.name, "content": result}]
+                    #print(" Tool Call Output:")
+                    #print(messages[-1])
+                if len(self.messages) > 8:
+                    if (self.messages[-1]['content'] == self.messages[-3]['content'] and
+                        self.messages[-2]['content'] == self.messages[-4]['content']):
+                        self.messages[-1] = {'role':'tool', 'name': call.function.name, 'content': """
+                                  Hey, it looks like you have been calling the same API for a while.
+                                  Are you sure this is actually the right place to look for the information you need?
+
+                                  ---
+
+                                  Now try again taking a different strategy.
+                                  """}
+                        print('\n[bold black]Coffee break. ☕️ [/]' + ' ' * 200, end = '\r')
+            else:
+                try:
+                    self.messages.append({'role':'assistant', 'content' : response['message']['content']})
+                    return response['message']['content']
+                except Exception as e:
+                    raise ValueError(f"Invalid JSON returned by Agent: {e} Raw content: {response['message']['content']}")
+                break
+
+
+
 class PipeLine:
     def __init__(self, workspace = None, root_dir = '.'):
         self.workspace = workspace
@@ -971,9 +1055,6 @@ class PipeLine:
 
         self.web = WebSearch()
         self.prompt_txt_files = []
-
-        self.task_agent_msgs = []
-
         docs = False
         if docs:
             self.doc = DocReaderTool.__new__(DocReaderTool)  # lazy init; must call pdf_open first
@@ -994,6 +1075,54 @@ class PipeLine:
                     print(self.svdtool.svd_device_info())
                     break
 
+
+
+        # Agents
+        #
+        #
+
+        # Prompt agent
+        prompt_path = os.path.join(os.path.dirname(__file__), 'prompt_agent_prompt.txt')
+        with open(prompt_path, 'r') as f:
+            prompt_sys = f.read()
+        self.prompt_agent = Agent(self, system=prompt_sys,
+                        tools = [self.llamascope, self.svdtool, self.web],
+                                options={
+                                    "temperature": 0.3,
+                                    "top_p": 0.9,
+                                    "repeat_penalty": 1.2,
+                                    "num_ctx": 32768
+                                })
+
+        # Task agent
+
+        prompt_path = os.path.join(os.path.dirname(__file__), 'task_agent_prompt.txt')
+        with open(prompt_path, 'r') as f:
+            task_sys = f.read()
+        self.task_agent = Agent(self, system = task_sys, tools = [self.llamascope],
+                            options={
+                                "temperature": 0.2,
+                                "top_p": 0.7,
+                                "repeat_penalty": 1.1,
+                                "num_ctx": 32768,
+                                "min_p" : 0.2
+                            })
+
+        # Coder agent
+
+        #chatcoder_path = os.path.join(os.path.dirname(__file__), 'chatcoder_prompt.txt')
+        #with open(chatcoder_path, 'r') as f:
+        #    chatcoder_sys = f.read()
+        #self.coder_agent = Agent(self, system = chatcoder_sys, tools = [],
+        #                options = {
+        #                    "temperature": 0.4,
+        #                    "top_p": 0.9,
+        #                    "repeat_penalty": 1.1,
+        #                    "num_ctx": 32768,
+        #                    "min_p": 0.2
+        #                })
+
+
     def get_rules(self, category):
         rules_dir = os.path.join(os.path.dirname(__file__), 'rules')
         rules_path = os.path.join(rules_dir, category + '.md')
@@ -1003,359 +1132,6 @@ class PipeLine:
             return rules
         except:
             return ''
-
-    def task_agent_forget(self):
-        self.task_agent_msgs = []
-
-    def call_task_agent(self, prompt_txt: str, model="qwen2.5-coder:32b"):
-        json_path = os.path.join(os.path.dirname(__file__), 'task_list.json')
-        with open(json_path, 'r') as f:
-            task_list = f.read()
-
-        rules = self.get_rules('design')
-        if len(rules) > 0:
-            rules = '\nHere are some mandatory rules to follow:\n' + rules + '\n'
-
-
-        system_prompt = """
-        You are a C code expert.
-
-        Your job is to convert the instructions in the prompt into a structured JSON list of tasks.
-
-        You never assume anything beyond what is explicitly stated in the prompt.
-        You must not make assumptions about the codebase or its structure. Do not invent new files or symbols unless explicitly instructed to do so by the user.
-        You must not assume that any particular file or symbol exists unless it is explicitly mentioned in the prompt or verified with the tools.
-
-        Each task must represent a single, atomic change in the codebase — affecting exactly one file and one symbol, type, macro, or construct. Multiple changes must be expressed as multiple separate tasks.
-
-        ---
-
-        You MUST verify the existence of any symbol you mention (functions, types, macros) using the available tool APIs.
-
-        If a symbol does not exist, you must either:
-        - Adjust the task to create it (e.g., "Define new type Foo_Type"), or
-        - Remove the task if it depends on non-existing code.
-
-        You are not allowed to assume any symbol exists without verifying.
-
-
-        Your output must consist of a **pure JSON list only**. Do not include comments, thoughts, or explanations of any kind.
-
-        ---
-
-        The following is a list of available task types:
-        """ + task_list + """
-
-        Each task MUST include the following fields:
-
-        - `"type"`: the kind of transformation to apply (must match one of the task types above)
-        - `"target"`: the name of the symbol, macro, type, or construct being edited or created. This represent the context where the changes apply, not the specific change itself.Do not invent new symbols unless explicitly instructed to do so by the user.
-        - `"file"`: the full relative path to the file where the change must be applied.  Must point to a real file, verified via lookup tools or explicitly named by the user.  Do not invent filenames. Do not guess. Use only confirmed file paths.
-        - `"details"`: a short human-readable summary of what this task will do
-        - `"references"`: a list of symbols, macros, or types relevant to this task (from the original context)
-        - `"peripherals"`: if the task involves embedded code or hardware configuration, include a list of the relevant peripherals (e.g. `["USART2"]`, `["DMA1", "GPIOA"]`)
-
-        The following fields are OPTIONAL and should be included only when relevant:
-
-        - `"target_new"`: if renaming a symbol or moving/creating a file, this is the new name or path
-        - `"location_hint"`: (optional) a string or line number hint about where the change should be applied, e.g. `"before main()"` or `42`
-
-        ---
-
-        Once all analysis and verification is complete, output your final action plan using the following JSON task format.
-
-        Use this structure for each task:
-        ```json
-        {
-          "type": "ActionType",
-          "target": "SymbolName",
-          "file": "FilePath",
-          "details": "A human-readable summary of the task",
-          "references": ["RelatedSymbol1", "RelatedSymbol2"],
-          "peripherals": ["Peripheral1", "Peripheral2"]
-        }
-        ```
-        If needed, you may include optional fields:
-
-        ```json
-        {
-          "type": "ActionType",
-          "target": "SymbolName",
-          "file": "FilePath",
-          "details": "A human-readable summary of the task",
-          "references": ["RelatedSymbol1", "RelatedSymbol2"],
-          "peripherals": ["Peripheral1", "Peripheral2"],
-          "target_new": "NewSymbolNameOrPath",
-          "location_hint": "LineOrTextHint"
-        }
-        ```
-
-        """
-
-        if self.svdtool.svd_device_info():
-            embedded_prompt = f"\nThis is an embedded C project targeting the device: {self.svdtool.svd_device_info()}.\n"
-        else:
-            embedded_prompt = ""
-
-        prompt = embedded_prompt + """
-        Break down this development request into specific, structured tasks following these steps:
-
-        - Carefully read and understand the prompt.
-        - Determine the overall goal and break it into smaller, self-contained actions if needed.
-        - If hardware is involved, identify the relevant peripherals or memory-mapped components (e.g., UART, SPI, DMA).
-        - For each action, identify a unique symbol (function, macro, type, etc.) to be created, modified, or removed. All symbols mentioned must be identified and confirmed to exist within the current codebase.
-        - Use the list of known Action types (provided separately) to classify each task accordingly.
-        - Ensure each task affects only one symbol or one file. If a change spans multiple symbols or files, split it into multiple tasks.
-        - Fill in all required task fields: type, target, file, details, references, and peripherals (if applicable). Don't be vague, be specific when naming symbols.
-        - Never assume existence: you must always look up the correct specific symbol within the repository.
-        - Reorder tasks by logical dependency: for example, create types before using them.
-        - Ensure every task has a clear and verbose description of what to do.
-        - The "references" field should include all symbols needed to complete the task effectively.
-        - Each task must be self-contained and independently executable.
-        - When you're confident all fields are correct and the task list is complete, output the list as valid, plain JSON.
-        - Do not include any extra explanation or text. Output only the JSON array of task objects.
-
-        If additional information is missing, you may use internal tools to inspect the codebase (e.g., function or macro lookup) before finalizing the task list.
-        Your output must consist of a **pure JSON list only**. Do not include comments, thoughts, or explanations of any kind.
-
-        User prompt:
-        """ + prompt_txt
-
-        tools = self.llamascope.get_tools()
-        tool_defs = [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.args_schema.model_json_schema()
-                }
-            }
-            for t in tools
-        ]
-
-        if len(self.task_agent_msgs) == 0:
-            self.task_agent_msgs = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt + '\n' + 'OUTPUT JSON:\n'}
-            ]
-        else:
-            prompt = """
-One of the tasks previously scheduled has failed. Please review the task and re-schedule it.
-*** You MUST NOT repeat the failing task in your response. *** The OUTPUT JSON will only consist of the new task revised, without the \"error\" field.
-            """ + prompt_txt
-            print("\n[red]❌ "+ prompt +'[/]\n')
-            self.task_agent_msgs.append({"role": "user", "content": prompt + '\n' + 'OUTPUT JSON:\n'})
-
-        #print(messages)
-        #print(tool_defs)
-        while True:
-            print("\n[green]Thinking...[/] 🤔💭 ", end = '\r')
-            response = ollama.chat(
-                model=model,
-                messages=self.task_agent_msgs,
-                tools=tool_defs,
-                options={
-                    "temperature": 0.2,
-                    "top_p": 0.7,
-                    "repeat_penalty": 1.1,
-                    "num_ctx": 32768,
-                    "min_p" : 0.2
-                }
-            )
-            if 'tool_calls' in response['message']:
-                for call in response['message']['tool_calls']:
-                    #print(f"[bold green]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
-                    try:
-                        if call.function.name in [x.name for x in self.llamascope.get_tools()]:
-                            print("[green]Reading code...[/] ⚙️                                               ", end="\r" )
-                            result = self.llamascope.handle_tool_call(call)
-                        elif call.function.name in [x.name for x in self.svdtool.get_tools()]:
-                            print(f"\n[bold yellow]Analyzing target device registers...[/] 🔬📖              ", end = '\r')
-                            result = self.svdtool.handle_tool_call(call)
-                    except Exception as e:
-                        self.task_agent_msgs+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
-                        continue
-                    if not result:
-                        result = ''
-                    self.task_agent_msgs+=[{"role": "tool", "name": call.function.name, "content": result}]
-                    #print(" Tool Call Output:")
-                    #print(messages[-1])
-                if len(self.task_agent_msgs) > 8:
-                    if (self.task_agent_msgs[-1]['content'] == self.task_agent_msgs[-5]['content'] and
-                        self.task_agent_msgs[-3]['content'] == self.task_agent_msgs[-7]['content']):
-                        self.task_agent_msgs[-1] = {'role':'tool', 'name': call.function.name, 'content': """
-                                  Hey, it looks like you have been calling the same API for a while.
-                                  Are you sure this is actually the right place to look for the information you need?
-                                  Rethink your life choices, agent. You have been warned.
-                                  Now try again taking a different strategy.
-                                  """}
-                        print('\n~~~ 😵😵😵 I\'m lost. ~~~' + ' ' * 200, end = '\r')
-            else:
-                try:
-                    # Unolad task module
-                    #host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-                    #url = f"{host}/api/delete"
-                    #requests.delete(url, json={'name': model})
-                    #print("Response:")
-                    #print (response['message']['content'])
-                    self.task_agent_msgs.append({'role':'assistant', 'content' : response['message']['content']})
-                    return json.loads(response['message']['content'].strip('```json\n'))
-                except Exception as e:
-                    raise ValueError(f"Invalid JSON returned by TaskAgent: {e} Raw content: {response['message']['content']}")
-                break
-
-    def call_prompt_agent(self, prompt: str, model='qwen2.5-coder:32b'):
-                          # model="MFDoom/deepseek-r1-tool-calling:70b"):
-        rules = self.get_rules('design')
-        if len(rules) > 0:
-            rules = '\nHere are some mandatory rules to follow:\n' + rules + '\n'
-        system_prompt = """
-        You are a C code parser and embedded task planner.
-
-        Your job is to analyze the user's development request and break it down into a multi-step action plan.
-
-        You do not write code.
-        You only describe the steps a developer must take to implement the requested functionality, one action at a time.
-
-        ---
-
-        You are provided with tools for:
-
-        - 🔍 **Codebase exploration**: to verify the existence and usage of functions, macros, types, and files
-        - 🌐 **Web search**: to clarify technical concepts, resolve acronyms, or investigate hardware behavior when not immediately evident in the project
-
-        ⚠️ Use web search **only when necessary** to understand unclear terminology, peripheral behavior, or standard patterns.
-        Do **not** use it to guess project-specific symbol names, files, or internal logic — rely on code lookup tools for that.
-
-        ---
-
-        You must be skeptical.
-        Never assume the existence of any function, file, macro, or type without verification.
-        Always check using the provided tools before mentioning any name or construct.
-
-        Each action must represent a single change to one code location in one file.
-        Your output must follow the specified structure and consist only of structured natural language actions.
-
-        """ + rules
-
-        usr_prompt = """
-        Work one step at a time, using the following phases:
-
-        ---
-
-        🔹 **Phase 1: Understand the Prompt**
-        - Read the user's request and translate it into accurate technical terminology for embedded C.
-
-        🔹 **Phase 2: Explore the Codebase**
-        - Use the tool APIs to verify the existence and usage of any mentioned symbols, types, macros, or files.
-        - Identify functions, files, and types that may need to be created or modified.
-        - Discover domain-relevant constructs using the same types or functions.
-
-        🔹 **Phase 3: Define Code Actions**
-        - Break the work into discrete, single-file code actions.
-        - Split complex changes into multiple atomic actions.
-        - Reorder the actions logically based on dependencies.
-
-        🔹 **Phase 4: Final Output Format**
-        Output a clean TODO list using the following structure:
-
-        - **Overview**:
-          - **Files Affected**: Full relative paths (no leading `/`)
-          - **Relevant Functions**: Verified existing functions in the same domain
-          - **Relevant Types**: Verified types (`struct`, `enum`, etc.)
-          - **Relevant Macros**: Verified related macros
-
-        - **Action N**:
-          - **Type of action**: "create" or "modify"
-          - **Description**: Natural-language instruction describing what to do (no code)
-
-        ---
-
-        🛑 Do not invent or assume anything. Only output verified information.
-        Your final response must contain **only the TODO list**, with no commentary or explanations. Omit thoughts.
-
-        ---
-
-        📦 **User Prompt**:
-
-         """ + prompt
-        #usr_prompt += """
-        #This is a list of the documents available:
-        #""" + '\n'.join(DocReaderTool.available) + '\n' +
-
-        tools = self.llamascope.get_tools() + self.web.get_tools() #+ self.doc.get_tools()
-        tool_defs = [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.args_schema.model_json_schema()
-                }
-            }
-            for t in tools
-        ]
-        #print("Tools: " + ','.join([x['function']['name'] for x in tool_defs]))
-        messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": usr_prompt + '\n' + 'OUTPUT ACTIONS:\n'}
-        ]
-        #print(messages)
-        while True:
-            print("\n[cyan]Thinking...[/] 🤔💭 ", end='\r')
-            response = ollama.chat(
-                model=model,
-                messages=messages,
-                tools=tool_defs,
-                options={
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.2,
-                    "num_ctx": 32768
-                }
-            )
-            if 'tool_calls' in response['message']:
-                for call in response['message']['tool_calls']:
-                    #print(f"[bold cyan]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
-                    try:
-                        if call.function.name in [x.name for x in self.llamascope.get_tools()]:
-                            print("[cyan]Reading code...[/] ⚙️                    ", end = '\r')
-                            result = self.llamascope.handle_tool_call(call)
-                        elif call.function.name in [x.name for x in self.web.get_tools()]:
-                            print("\n[green]Browsing the internet...[/] 🌐🌐🌐     ", end='\r')
-                            result = self.web.handle_tool_call(call)
-                            #print("Web result:\n", result)
-                        elif call.function.name in [x.name for x in self.svdtool.get_tools()]:
-                            print("\n[bold yellow]Analyzing target device registers...[/] 🔬📖              ", end = '\r')
-                            result = self.svdtool.handle_tool_call(call)
-                        elif call.function.name in [x.name for x in self.doc.get_tools()]:
-                            print("\n[cyan]Reading books...[/]    📖🤓                ", end = '\r')
-                            #print(f"[bold cyan]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
-                            result = self.doc.handle_tool_call(call)
-                    except Exception as e:
-                        messages+=[{'role':'tool', 'name': call.function.name, 'content': f'Error: tool {call.function.name}: {str(e)}'}]
-                        continue
-                    if not result:
-                        result = ''
-                    messages+=[{"role": "tool", "name": call.function.name, "content": result}]
-                    #print(" Tool Call Output:")
-                    #print(messages[-1])
-                if len(messages) > 8:
-                    if (messages[-1]['content'] == messages[-5]['content'] and
-                        messages[-3]['content'] == messages[-7]['content']):
-                        messages[-1] = {'role':'tool', 'name': call.function.name, 'content': """
-                                  Hey, it looks like you have been calling the same API for a while.
-                                  Are you sure this is actually the right place to look for the information you need?
-                                  Rethink your life choices, agent. You have been warned.
-                                  Now try again taking a different strategy.
-                                  """}
-                        print('~~~ 😵😵😵 I\'m lost. ~~~' + ' ' * 200, end = '\r')
-            else:
-                msg_content = response['message']['content']
-                # Remove Deepseek CoT <think> </think>
-                msg_content = re.sub(r'<think>.*?</think>', '', msg_content)
-                return msg_content
 
     def explain(self, prompt):
         print(f"[bold yellow]{prompt}[/]")
@@ -1511,7 +1287,51 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                     file_content = f.read()
                 prompt = prompt[0:idx] + '\n\n' + file_content + prompt[idx + len(file_name):]
             try:
-                expanded_prompt = self.call_prompt_agent(prompt)
+                usr_prompt = """
+                Work one step at a time, using the following phases:
+
+                ---
+
+                🔹 **Phase 1: Understand the Prompt**
+                - Read the user's request and translate it into accurate technical terminology for embedded C.
+
+                🔹 **Phase 2: Explore the Codebase**
+                - Use the tool APIs to verify the existence and usage of any mentioned symbols, types, macros, or files.
+                - Identify functions, files, and types that may need to be created or modified.
+                - Discover domain-relevant constructs using the same types or functions.
+
+                🔹 **Phase 3: Define Code Actions**
+                - Break the work into discrete, single-file code actions.
+                - Split complex changes into multiple atomic actions.
+                - Reorder the actions logically based on dependencies.
+
+                🔹 **Phase 4: Final Output Format**
+                Output a clean TODO list using the following structure:
+
+                - **Overview**:
+                  - **Files Affected**: Full relative paths (no leading `/`)
+                  - **Relevant Functions**: Verified existing functions in the same domain
+                  - **Relevant Types**: Verified types (`struct`, `enum`, etc.)
+                  - **Relevant Macros**: Verified related macros
+
+                - **Action N**:
+                  - **Type of action**: "create" or "modify"
+                  - **Description**: Natural-language instruction describing what to do (no code)
+
+                ---
+
+                🛑 Do not invent or assume anything. Only output verified information.
+                Your final response must contain **only the TODO list**, with no commentary or explanations. Omit thoughts.
+
+                ---
+
+                📦 **User Prompt**:
+
+                 """ + prompt + """
+                 OUTPUT ACTIONS:
+                 """
+
+                expanded_prompt = self.prompt_agent.run(usr_prompt)
             except ValueError as e:
                 print("Failed to parse prompt:", e)
                 return
@@ -1519,19 +1339,53 @@ One of the tasks previously scheduled has failed. Please review the task and re-
 
         print(f"[bold green]{expanded_prompt}[/bold green]")
         patches = []
-        self.task_agent_forget()
+        self.task_agent.forget()
         print("[bold green]Generating a list of tasks based on prompt.[/bold green]")
 
         try:
             print('[green]Organizing tasks...[/]  ✅                           ', end='\r' )
-            tasks = self.call_task_agent(expanded_prompt)
+            if self.svdtool.svd_device_info():
+                embedded_prompt = f"\nThis is an embedded C project targeting the device: {self.svdtool.svd_device_info()}.\n"
+            else:
+                embedded_prompt = ""
+
+            prompt = embedded_prompt + """
+            Break down this development request into specific, structured tasks following these steps:
+
+            - Carefully read and understand the prompt.
+            - Determine the overall goal and break it into smaller, self-contained actions if needed.
+            - If hardware is involved, identify the relevant peripherals or memory-mapped components (e.g., UART, SPI, DMA).
+            - For each action, identify a unique symbol (function, macro, type, etc.) to be created, modified, or removed. All symbols mentioned must be identified and confirmed to exist within the current codebase.
+            - Use the list of known Action types (provided separately) to classify each task accordingly.
+            - Ensure each task affects only one symbol or one file. If a change spans multiple symbols or files, split it into multiple tasks.
+            - Fill in all required task fields: type, target, file, details, references, and peripherals (if applicable). Don't be vague, be specific when naming symbols.
+            - Never assume existence: you must always look up the correct specific symbol within the repository.
+            - Reorder tasks by logical dependency: for example, create types before using them.
+            - Ensure every task has a clear and verbose description of what to do.
+            - The "references" field should include all symbols needed to complete the task effectively.
+            - Each task must be self-contained and independently executable.
+            - When you're confident all fields are correct and the task list is complete, output the list as valid, plain JSON.
+            - Do not include any extra explanation or text. Output only the JSON array of task objects.
+
+            If additional information is missing, you may use internal tools to inspect the codebase (e.g., function or macro lookup) before finalizing the task list.
+            Your output must consist of a **pure JSON list only**. Do not include comments, thoughts, or explanations of any kind.
+
+            User prompt:
+            """ + expanded_prompt + """
+
+            ---
+
+            Output JSON:
+            """
+
+            response = self.task_agent.run(prompt)
+            tasks = json.loads(response.strip('```json\n'))
         except ValueError as e:
             print("Failed to parse task list:", e)
             return
 
         print("[bold yellow]Tasks:[/]")
         print(json.dumps(tasks, indent=4))
-
 
         job_done = False
         while not job_done:
@@ -1562,15 +1416,18 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                     {json.dumps(task)}
                     ```
 
+                    ---
+
+                    Output JSON:
                     """
-                    tasks += self.call_task_agent(prompt)
-                    tasks.remove(task)
+
+                    print(prompt)
+                    response = self.task_agent.run(prompt)
+                    tasks = json.loads(response.strip('```json\n'))
                     break
 
                 if task.get('error'):
                     continue
-
-                print(f"Dispatching task: {task_type} for target '{target}': {task.get('details')}")
 
                 try:
                     task_patches = self.dispatch_to_coder(task)
@@ -1579,22 +1436,26 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                     if len(task_patches) == 0:
                         print("No tasks parsed.")
                         break
-                    for tp in task_patches:
-                        if not tp.get('path'):
-                            task.update({'error': 'No path could be identified by coder.'})
-                            break
-                        if not tp.get('line'):
-                            task.update({'error': 'No relevant line could be identified by coder in file'})
-                            break
                 except Exception as err:
                     task.update({'error':str(err)})
                     break
 
 
-                for t in task_patches:
-                    if t.get('error'):
-                        task.update({'error':t['error']})
+                for tp in task_patches:
+                    if not tp.get('path'):
+                        task.update({'error': 'No path could be identified by coder.'})
                         continue
+                    if tp.get('line', -1) < 0:
+                        task.update({'error': 'No relevant line could be identified by coder in file'})
+                        continue
+
+                for tp in task_patches:
+                    if tp.get('error') and not task.get('error'):
+                        task.update({'error':tp['error']})
+                        continue
+
+                if task.get('error'):
+                    continue
 
                 # In-place sorting for patching in the right order
                 task_patches.sort(key=lambda p: (p['path'], -p['line']))
@@ -1614,9 +1475,9 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                     print(f"[bold green]Patching {patch['path']}:{str(patch['line'])}[/]:\n" + str(add_lines) + '+, ' + str(remove_lines) + '-\n')
                     self.llamascope.ghost_apply(patch)
                     patches.append(patch)
-                print("🩹 This task generated " + str(len(task_patches)) + "patches 🩹")
+                pl = '' if len(patches) == 1 else 'es'
+                print("🩹 This task generated " + str(len(task_patches)) + " patch"  + pl)
                 tasks.remove(task)
-
         print("🩹 Total patches: 🩹" + str(len(patches)))
         response = { 'role': 'assistant', 'message': {'content': {'patches': patches} } }
         return response
@@ -1699,8 +1560,8 @@ One of the tasks previously scheduled has failed. Please review the task and re-
         elif task['type'] == 'FunctionRefactor' or task['type'] == 'StubCompletion' or task['type'] == 'TypeRefactor' or task['type'] == 'MacroRefactor':
             sym = self.llamascope.get_symbol(task['target'])
             if not sym:
-                print(f'[red]Error: Symbol {task["target"]} not found.[/red]')
-                return []
+                e = f'Error: Symbol {task["target"]} not found.'
+                return [{'error': e}]
             file = sym['file']
             line = sym['line']
             with open(file, 'r') as f:
@@ -1995,7 +1856,7 @@ One of the tasks previously scheduled has failed. Please review the task and re-
             if (len(dirname) > 0) and not os.path.exists(dirname):
                 os.makedirs(dirname, exist_ok = True)
             with open(task['file'], 'w') as f:
-                f.close()
+                f.write('\n')
             patches = [
                     { "path": task['file'],
                       "line": 0,
@@ -2062,7 +1923,7 @@ One of the tasks previously scheduled has failed. Please review the task and re-
                 }
             else:
                 print(f"[Editor] Include already exists in: {task['file']}")
-                patch = []
+                return []
             return [patch]
         elif task['type'] == 'DeleteFunction':
             sym = self.llamascope.get_symbol(task['target'])
