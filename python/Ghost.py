@@ -75,12 +75,8 @@ class SVDTool(Tool):
             print(f"Error retrieving device information: {str(e)}")
             return None
 
-    @tool
     @staticmethod
-    def svd_lookup_peripherals(peri):
-        """Lookup a peripheral descriptor, by name. Returns a JSON string of the peripheral descriptor."""
-        """Use this tool API to find the base address of the peripheral, and to learn about its composition."""
-        """Fields of each registers are omitted in this summarized view, to limit the context used. """
+    def lookup_peripherals(peri):
         result = []
         txt_res = ''
         def peripheral_summary(periph):
@@ -97,8 +93,9 @@ class SVDTool(Tool):
             }
         try:
             if SVDTool.svd_device:
+                #  print(f"[yellow2]Device has {str(len(SVDTool.svd_device.peripherals))} peripherals[/]")
                 for p in SVDTool.svd_device.peripherals:
-                    if peri in p['name']:
+                    if peri in p.name:
                         p = peripheral_summary(p)
                         result.append(p)
         except:
@@ -108,8 +105,19 @@ class SVDTool(Tool):
 
         if len(txt_res) == 0:
             txt_res = 'svd_lookup_peripherals: No results found for ' + peri
+
         return txt_res
 
+    @tool
+    @staticmethod
+    def svd_lookup_peripherals(peri):
+        """Lookup a peripheral descriptor, by name. Returns a JSON string of the peripheral descriptor."""
+        """Use this tool API to find the base address of the peripheral, and to learn about its composition."""
+        """Fields of each registers are omitted in this summarized view, to limit the context used. """
+        return SVDTool.lookup_peripherals(peri)
+
+    @tool
+    @staticmethod
     def svd_lookup_register_by_name(regname):
         """Search for a specific register matching the provided name, in all peripherals on the device."""
         """Returns a JSON string of the register descriptors matching the name."""
@@ -134,24 +142,21 @@ class SVDTool(Tool):
         except:
             pass
 
-        for r in results:
+        for r in result:
             txt_res += json.dumps(r, indent=2) + '\n'
 
         if len(txt_res) == 0:
             txt_res = 'svd_lookup_register_by_name: No results found for ' + regname
         return txt_res
 
-    @tool
     @staticmethod
-    def svd_lookup_register_in_periph(peri_name, reg_name):
-        """Search for a specific register within a peripheral. Returns the register descriptor in a JSON object if found."""
-        """Use this tool API to find the information of specific register of the peripherals you are working on."""
+    def lookup_register_in_periph(peri_name, reg_name):
         result = []
         txt_res = ''
         try:
             if SVDTool.svd_device:
                 for p in SVDTool.svd_device.peripherals:
-                    if peri_name == p.name:
+                    if peri_name in p.name:
                         for r in p.registers:
                             if reg_name in r.name:
                                 result.append(r)
@@ -166,6 +171,13 @@ class SVDTool(Tool):
         if len(txt_res) == 0:
             txt_res = 'svd_lookup_register_in_periph: No results found for ' + reg_name
         return txt_res
+
+    @tool
+    @staticmethod
+    def svd_lookup_register_in_periph(peri_name, reg_name):
+        """Search for a specific register within a peripheral. Returns the register descriptor in a JSON object if found."""
+        """Use this tool API to find the information of specific register of the peripherals you are working on."""
+        return SVDTool.lookup_register_in_periph(peri_name,reg_name)
 
 
 
@@ -477,7 +489,7 @@ class CodeLookup:
         if (len(adding) > 0) and not adding.endswith('\n'):
             adding += '\n'
 
-        rem_lines = removing.count('\n')
+        #rem_lines = removing.count('\n')
         #print('lines to remove: ', str(rem_lines))
 
         with open(file, 'rb+') as f:
@@ -536,8 +548,7 @@ class CodeLookup:
                     src_file_path = os.path.join(root, file)
                     dst_file_path = src_file_path.replace(self.ghost_dir, self.base_dir)
                     dst_dir = os.path.dirname(dst_file_path)
-                    if not os.path.exists(dst_dir):
-                        os.makedirs(dst_dir)
+                    os.makedirs(dst_dir, exist_ok=True)
                     shutil.copy2(src_file_path, dst_file_path)
 
 
@@ -556,7 +567,6 @@ class CodeLookup:
         if max_ > 0:
             content = content[:max_]
         return content.decode(errors='replace')
-
 
     def extract_symbols(self, source_code, file_path):
         """Extract function definitions using tree-sitter."""
@@ -960,7 +970,7 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             return 0
 
 class Agent:
-    def __init__(self, pipeline, model='qwen2.5-coder:32b',
+    def __init__(self, pipeline, model='qwen3:30b-a3b',
                  system='You are a helpful assistant',
                  tools = [],
                  options = { }
@@ -997,11 +1007,12 @@ class Agent:
                 model=self.model,
                 messages=self.messages,
                 tools=self.tools,
-                options= self.options
+                options= self.options,
+                stream=False
             )
             if 'tool_calls' in response['message']:
                 for call in response['message']['tool_calls']:
-                    #print(f"[bold green]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
+                    print(f"[bold green]Tool Call:[/][bold yellow] {call.function.name} [/][green]with arguments [/][bold yellow]{call.function.arguments}[/]")
                     try:
                         if call.function.name in [x.name for x in self.pipeline.llamascope.get_tools()]:
                             print("[green]Reading code...[/] ⚙️                                               ", end="\r" )
@@ -1036,7 +1047,11 @@ class Agent:
             else:
                 try:
                     self.messages.append({'role':'assistant', 'content' : response['message']['content']})
-                    return response['message']['content']
+                    ret = response['message']['content']
+                    # Remove <think> COT - multiple lines</think>
+                    ret = re.sub(r'<think>.*?</think>', '', ret, flags=re.DOTALL)
+
+                    return ret
                 except Exception as e:
                     raise ValueError(f"Invalid JSON returned by Agent: {e} Raw content: {response['message']['content']}")
                 break
@@ -1046,12 +1061,10 @@ class Agent:
 class PipeLine:
     def __init__(self, workspace = None, root_dir = '.'):
         self.workspace = workspace
-        print('[bold magenta] Initializing Llamascope...[/]')
+        print('[bold magenta]Initializing Llamascope...[/]')
         self.llamascope = ExtendedLlamaScope(root_dir)
-        print('\n[bold magenta] Llamascope initialized[/]')
+        print('\n[bold magenta]Llamascope initialized[/]')
 
-        self.svdtool = SVDTool()
-        print('\n[bold magenta] SVD Tool initialized.[/]')
 
         self.web = WebSearch()
         self.prompt_txt_files = []
@@ -1065,6 +1078,8 @@ class PipeLine:
                         DocReaderTool.available.append(file_path)
             print("[cyan]Available documents:[/] " + '\n'.join(DocReaderTool.available))
 
+        print('\n[bold magenta]Initializing SVT Tool...[/]')
+        self.svdtool = SVDTool()
         # Import SVD file
         for root, dirs, files in os.walk(root_dir):
             for file in files:
@@ -1074,6 +1089,7 @@ class PipeLine:
                     self.svdtool.parse(file_path)
                     print(self.svdtool.svd_device_info())
                     break
+        print('\n[bold magenta] SVD Tool initialized.[/]')
 
 
 
@@ -1086,11 +1102,11 @@ class PipeLine:
         with open(prompt_path, 'r') as f:
             prompt_sys = f.read()
         self.prompt_agent = Agent(self, system=prompt_sys,
-                        tools = [self.llamascope, self.svdtool, self.web],
+                        tools = [self.llamascope, self.web],
                                 options={
-                                    "temperature": 0.3,
-                                    "top_p": 0.9,
-                                    "repeat_penalty": 1.2,
+                                    "temperature": 0.1,
+                                    "top_p": 0.6,
+                                    "repeat_penalty": 1.05,
                                     "num_ctx": 32768
                                 })
 
@@ -1099,44 +1115,53 @@ class PipeLine:
         prompt_path = os.path.join(os.path.dirname(__file__), 'task_agent_prompt.txt')
         with open(prompt_path, 'r') as f:
             task_sys = f.read()
-        self.task_agent = Agent(self, system = task_sys, tools = [self.llamascope],
+        self.task_agent = Agent(self, system = task_sys,
+                            tools = [self.llamascope, self.svdtool],
                             options={
-                                "temperature": 0.2,
-                                "top_p": 0.7,
-                                "repeat_penalty": 1.1,
+                                "temperature": 0.5,
+                                "top_p": 0.8,
                                 "num_ctx": 32768,
                                 "min_p" : 0.2
                             })
 
         # Coder agent
 
-        #chatcoder_path = os.path.join(os.path.dirname(__file__), 'chatcoder_prompt.txt')
-        #with open(chatcoder_path, 'r') as f:
-        #    chatcoder_sys = f.read()
-        #self.coder_agent = Agent(self, system = chatcoder_sys, tools = [],
-        #                options = {
-        #                    "temperature": 0.4,
-        #                    "top_p": 0.9,
-        #                    "repeat_penalty": 1.1,
-        #                    "num_ctx": 32768,
-        #                    "min_p": 0.2
-        #                })
+        chatcoder_path = os.path.join(os.path.dirname(__file__), 'coder_agent_prompt.txt')
+        with open(chatcoder_path, 'r') as f:
+            chatcoder_sys = f.read()
+        self.coder_agent = Agent(pipeline = self,
+                                 model='qwen2.5-coder:32b',
+                                 system=chatcoder_sys,
+                                 tools=[],  # No tools
+                                 options={
+                                    "temperature": 0.2,
+                                    "top_p": 0.9,
+                                    "num_ctx": 32768,
+                                    "min_p": 0.2
+                                 })
+
+        # Tasks critic agent
+        #
+        task_critic = os.path.join(os.path.dirname(__file__), 'task_critic_agent_prompt.txt')
+        with open(task_critic, 'r') as f:
+            task_critic_sys = f.read()
+        self.task_critic_agent = Agent(self, system = task_critic_sys,
+                        tools = [self.svdtool, self.llamascope],
+                        options={
+                            "temperature": 0.2,
+                            "top_p": 0.7,
+                            "repeat_penalty": 1.1,
+                            "num_ctx": 32768,
+                            "min_p" : 0.1
+                        })
 
 
-    def get_rules(self, category):
-        rules_dir = os.path.join(os.path.dirname(__file__), 'rules')
-        rules_path = os.path.join(rules_dir, category + '.md')
-        try:
-            with open(rules_path, 'r') as f:
-                rules = f.read()
-            return rules
-        except:
-            return ''
+
+
 
     def explain(self, prompt):
         print(f"[bold yellow]{prompt}[/]")
         print("[bold yellow]Explain.[/]\n\n")
-        model = 'qwen2.5-coder:32b'
         embedded_device = self.svdtool.svd_device_info()
 
         if embedded_device:
@@ -1159,6 +1184,8 @@ class PipeLine:
 
         # Uncomment to enable web access
         #tools += self.web.get_tools()
+
+        model = 'qwen3:30b-a3b'
 
         messages = [
                 {"role": "system", "content":'You are a C code expert. Assist the user with their questions by using the API provided.\n' +
@@ -1241,7 +1268,7 @@ class PipeLine:
             if file_path not in ExtendedLlamaScope.files:
                 print(f'[bold red]Error: source file {file_path} not in the project index[/]')
                 return
-            line = int(txt[2])
+            line = int(txt[2]) - 1
             sz = int(txt[3])
             try:
                 with open(file_path, 'rb') as f:
@@ -1264,7 +1291,7 @@ class PipeLine:
             self.explain(prompt.replace('@explain', ''))
             return
 
-        print(f"[bold green]{prompt}[/bold green]")
+        print(f"[light_salmon1]{prompt}[/]")
 
         if '@actions:' in prompt:
             # Use the provided actions from a file
@@ -1288,22 +1315,24 @@ class PipeLine:
                 prompt = prompt[0:idx] + '\n\n' + file_content + prompt[idx + len(file_name):]
             try:
                 usr_prompt = """
-                Work one step at a time, using the following phases:
+                Work one step at a time to achieve the final answer. Use the following plan:
 
                 ---
 
                 🔹 **Phase 1: Understand the Prompt**
                 - Read the user's request and translate it into accurate technical terminology for embedded C.
 
-                🔹 **Phase 2: Explore the Codebase**
-                - Use the tool APIs to verify the existence and usage of any mentioned symbols, types, macros, or files.
+                🔹 **Phase 2: Explore the Codebase using the tools**
+                - Do not make assumptions about the codebase or the memory mapped registers and addresses
                 - Identify functions, files, and types that may need to be created or modified.
                 - Discover domain-relevant constructs using the same types or functions.
+                - You MUST STOP generating the final answer, prepare a tool_call query and  use the provided tool APIs to verify the existence and usage of any mentioned symbols, types, macros, or files.
 
                 🔹 **Phase 3: Define Code Actions**
                 - Break the work into discrete, single-file code actions.
                 - Split complex changes into multiple atomic actions.
                 - Reorder the actions logically based on dependencies.
+                - Resolve all missing addresses and hardcoded values using the provided tool APIs. Do not leave any discovery/research unresolved.
 
                 🔹 **Phase 4: Final Output Format**
                 Output a clean TODO list using the following structure:
@@ -1313,6 +1342,7 @@ class PipeLine:
                   - **Relevant Functions**: Verified existing functions in the same domain
                   - **Relevant Types**: Verified types (`struct`, `enum`, etc.)
                   - **Relevant Macros**: Verified related macros
+                  - **Peripherals**: Any peripherals on the system affected by your list of actions
 
                 - **Action N**:
                   - **Type of action**: "create" or "modify"
@@ -1321,31 +1351,29 @@ class PipeLine:
                 ---
 
                 🛑 Do not invent or assume anything. Only output verified information.
-                Your final response must contain **only the TODO list**, with no commentary or explanations. Omit thoughts.
+                Your final response must contain **only the TODO list**, with no commentary or explanations.
 
                 ---
-
                 📦 **User Prompt**:
 
                  """ + prompt + """
                  OUTPUT ACTIONS:
                  """
-
                 expanded_prompt = self.prompt_agent.run(usr_prompt)
             except ValueError as e:
                 print("Failed to parse prompt:", e)
                 return
             expanded_prompt = 'User requested: ' + prompt + '\nI have expanded that request into the following actions:\n\n' + expanded_prompt
 
-        print(f"[bold green]{expanded_prompt}[/bold green]")
+        print(f"[gold1]{expanded_prompt}[/]")
         patches = []
         self.task_agent.forget()
-        print("[bold green]Generating a list of tasks based on prompt.[/bold green]")
+        print("[violet]Generating a list of tasks based on prompt.[/]")
 
         try:
-            print('[green]Organizing tasks...[/]  ✅                           ', end='\r' )
+            print('[violet]Organizing tasks...[/]  ✅                           ', end='\r' )
             if self.svdtool.svd_device_info():
-                embedded_prompt = f"\nThis is an embedded C project targeting the device: {self.svdtool.svd_device_info()}.\n"
+                embedded_prompt = f"\nThis is an embedded C project targeting the device: {self.svdtool.svd_device_info()}. Ensure that all code that will be generated is compatible with this platform.\n"
             else:
                 embedded_prompt = ""
 
@@ -1354,7 +1382,7 @@ class PipeLine:
 
             - Carefully read and understand the prompt.
             - Determine the overall goal and break it into smaller, self-contained actions if needed.
-            - If hardware is involved, identify the relevant peripherals or memory-mapped components (e.g., UART, SPI, DMA).
+            - If hardware is involved, identify the relevant peripherals or memory-mapped components (e.g., UART, SPI, DMA). If available, use svd_lookup_peripherals() tool_call, to identify registers and fields.
             - For each action, identify a unique symbol (function, macro, type, etc.) to be created, modified, or removed. All symbols mentioned must be identified and confirmed to exist within the current codebase.
             - Use the list of known Action types (provided separately) to classify each task accordingly.
             - Ensure each task affects only one symbol or one file. If a change spans multiple symbols or files, split it into multiple tasks.
@@ -1362,7 +1390,8 @@ class PipeLine:
             - Never assume existence: you must always look up the correct specific symbol within the repository.
             - Reorder tasks by logical dependency: for example, create types before using them.
             - Ensure every task has a clear and verbose description of what to do.
-            - The "references" field should include all symbols needed to complete the task effectively.
+            - The "references" field should include all symbols needed to complete the task effectively and verified by accessing the tool_calls API.
+            - The "peripheral" field and any memory-mapped address should be verified  by accessing the tool_calls API to visit the SVD file, if available.
             - Each task must be self-contained and independently executable.
             - When you're confident all fields are correct and the task list is complete, output the list as valid, plain JSON.
             - Do not include any extra explanation or text. Output only the JSON array of task objects.
@@ -1379,13 +1408,61 @@ class PipeLine:
             """
 
             response = self.task_agent.run(prompt)
-            tasks = json.loads(response.strip('```json\n'))
+            #print("[wheat1]Response[/]:")
+            #print(response)
+
+            if '```json' in response:
+                response = response.replace('```json', '').replace('```', '')
+            tasks = json.loads(response)
+            print("[bold yellow]Tasks:[/]")
+            for t in tasks:
+                print('  - [gold1]' + t.get('type') + '[/]: [thistle1]' + t.get('details') + '[/]')
+
+            print("[bold yellow]Reviewing the task list.[/]")
         except ValueError as e:
             print("Failed to parse task list:", e)
-            return
+            response = "This task list contains an error: {str(e)}. Please fix it." + response
 
-        print("[bold yellow]Tasks:[/]")
-        print(json.dumps(tasks, indent=4))
+
+
+        critic_prompt = """
+        Review the current task list. If any task is missing critical information or if there are logical errors in the task list, please correct them.
+        When the task list is complete and accurate, output the corrected JSON array of tasks.
+
+        Use the provided tool_call API to check for symbols in code files.
+        Your output must consist of a **pure JSON list only**. Do not include comments, thoughts, or explanations of any kind.
+
+        ---
+        """
+
+        try:
+            response = self.task_critic_agent.run(critic_prompt + """
+
+            Original assignment:
+            """ + expanded_prompt + """\n\n
+
+            ---
+
+            Task list returned by task agent:
+            """ + response + """
+
+            ---
+
+            Revised task list JSON:
+            """)
+
+            if '```json' in response:
+                response = response.replace('```json', '').replace('```', '')
+            tasks = json.loads(response)
+            for t in tasks:
+                print('  - [gold1]' + t.get('type') + '[/]: [thistle1]' + t.get('details') + '[/]')
+        except Exception as e:
+            print("[red]Invalid JSON response from task critic agent.[/]")
+            print(str(e))
+            print(f"{response}\n")
+            return []
+
+        print('[green]Task review completed.[/]')
 
         job_done = False
         while not job_done:
@@ -1409,21 +1486,31 @@ class PipeLine:
                     prompt = f"""
                     The following tasks could not be applied and produced errors:. See the \"error\" field for details.
 
-                    Please provide a new task that can be applied without errors, according
-                    to the original task and taking into account the errors you produced.
+                    Identify the task in the list you just provided.
+
+                    Provide a new task list with the current task and the remaining tasks after it, that can be applied without errors.
+                    Act according to the order of the tasks in your original task list in your previous message, and taking into account
+                    the errors you produced while the current task was being processed. Ignore any tasks in the list before this one, and do not
+                    repeat them in your answer.
+
+                    The current failing task is:
 
                     ```json
                     {json.dumps(task)}
                     ```
-
                     ---
 
-                    Output JSON:
+                    OUTPUT JSON:
                     """
 
                     print(prompt)
-                    response = self.task_agent.run(prompt)
-                    tasks = json.loads(response.strip('```json\n'))
+                    response = self.task_critic_agent.run(prompt)
+                    if '```json' in response:
+                        response = response.replace('```json', '').replace('```', '')
+                    try:
+                        tasks = json.loads(response)
+                    except Exception as e:
+                        print("[bold red]Could not parse output from task critic agent: " + str(e) + '[/]')
                     break
 
                 if task.get('error'):
@@ -1486,14 +1573,12 @@ class PipeLine:
         file = task.get('file')
         if not file:
             print("[red][Coder]No file specified[/]")
-            return None
+            return [{'error': "Missing file"}]
 
         print(f"\n\n[bold cyan] 👻 [Coder]{task['type']}:[/] {task['file']}, {task['target']}. {task['details']}")
 
         deleting = ""
         prefix = ''
-        suffix = ''
-        context = ''
         callers = []
         called = []
 
@@ -1506,7 +1591,7 @@ class PipeLine:
 
         callers,callers_src = self.llamascope.get_callers(task['target'])
         if len(callers) > 0 and callers_src:
-            suffix += callers_src + '\n'
+            prefix += callers_src + '\n'
 
         self.refs = self.llamascope.get_references(task['references'])
         for r, code in self.refs.items():
@@ -1517,23 +1602,34 @@ class PipeLine:
 
 
         embedded_dev = self.svdtool.svd_device_info()
-        if embedded_dev:
+        if embedded_dev and task.get('peripherals'):
+
+            print(f"*** [yellow]Found embedded device information for this task.[/]")
+            peri_list = task['peripherals']
+
+
+
             prefix += 'You are developing embedded C for the following target:\n'
             prefix += embedded_dev + '\n\n'
             prefix += '- Please ensure your code is compatible with this device.\n\n'
             prefix += '- Use appropriate memory-mapped registers and peripherals.\n\n'
             prefix += '- Avoid including any standard libraries that are not available in the embedded environment.\n\n'
 
-            peri_list = task.get('peripherals')
-            if peri_list and (len(peri_list) > 0):
+            svd_data = ''
+
+            if len(peri_list) > 0:
                 prefix += 'A description of the relevant peripherals for this task in JSON format is provided here below:\n'
-            for peri in task.get('peripherals'):
-                prefix += json.dumps(peri, indent=2) + '\n\n'
-                print(f"[yellow]Included peripheral description:[/]\n{json.dumps(peri, indent=4)}\n")
+            for p in peri_list:
+                print(f'*** [yellow]Including peripheral description for {p["name"]}[/]')
+                svd_data += SVDTool.lookup_peripherals(p['name'])
+                if p.get('registers'):
+                    for r in p['registers']:
+                        svd_data += SVDTool.lookup_register_in_periph(['name'], r)
 
-            print(f"*** [yellow]Found {str(len(peri_list))} referenced peripherals for this task.[/]")
+            print(f'[yellow2]Added {str(len(svd_data))} bytes of SVD data to the context[/]')
+            prefix += svd_data
 
-        if task['type'] in ('FunctionGeneration', 'SymbolImplementation'):
+        if task['type'] in ('FunctionGeneration', 'TypeDefinition', 'MacroDefinition'):
             file_path = task.get('file')
             if not os.path.exists(file_path):
                 dirname = os.path.dirname(file_path)
@@ -1543,13 +1639,12 @@ class PipeLine:
                     f.write(f'/* {file_path} */ ')
             with open(file_path, 'r') as f:
                 content = f.read()
-
+        if task['type'] in ('FunctionGeneration'):
             def find_symbol_insert_line(lines):
                 # Just... insert at the very end
                 return len(lines)
 
             line = find_symbol_insert_line(content.splitlines())
-            context = ''
             if task['type'] == 'FunctionGeneration':
                 prefix += 'Generate a new function called ' + task['target'] + '\n'
             else:
@@ -1569,7 +1664,6 @@ class PipeLine:
             deleting = code[sym['start']:sym['end']]
             print(f'[magenta](replacing code in file {file} at line {line} len {len(deleting)} bytes)[/magenta]')
 
-            context = ''
             prefix = 'Your Task: Rewrite the code provided below: \n'
             prefix += deleting
             prefix += '\n\n'
@@ -1579,18 +1673,8 @@ class PipeLine:
             prefix += '- Add C-style comments explaining the introduced changes.\n'
 
         elif task['type'] == 'TypeDefinition':
-            file_path = task.get('file')
-            if not os.path.exists(file_path):
-                dirname = os.path.dirname(file_path)
-                if (len(dirname) > 0) and not os.path.exists(dirname):
-                    os.makedirs(dirname, exist_ok = True)
-                with open(file_path, 'w') as f:
-                    f.write(f'/* {file_path} */ ')
-            with open(file_path, 'r') as f:
-                content = f.read()
-                line = content.count('\n')
-            context = ''
-            prefix+= 'Generate a new type called ' + task['target'] + '\n'
+            line = content.count('\n')
+            prefix += 'Generate a new type called ' + task['target'] + '\n'
             prefix += 'Specifications: ' + task['details'] + '\n'
             file = file_path
             with open(file_path, 'rb') as f:
@@ -1632,12 +1716,13 @@ class PipeLine:
             line = find_type_insert_line(src.splitlines())
         elif task['type'] == 'MacroDefinition':
             sym = self.llamascope.get_symbol(task['target'])
-            file = task.get('file')
+            file = task['file']
             if not sym:
-                context = f'The new macro`{task["target"]}` is not yet defined in the current file. Write it from scratch.'
                 with open(file, 'rb') as f:
                     content = f.read().decode('utf-8', errors='replace')
                 line = self.llamascope.find_first_code_line(file)
+                prefix = f'New macro definition: {task["target"]}\n'
+                prefix += 'Specifications: ' + task['details'] + '\n'
             else:
                 line = sym['line']
                 with open(file, 'rb') as f:
@@ -1645,13 +1730,16 @@ class PipeLine:
                 deleting = code[sym['start']:sym['end']]
                 prefix = '/* Original macro before the requested changes: */ \n' + deleting + '\n'
                 prefix += 'Specifications: ' + task['details'] + '\n'
-                context += '/* Rules:\n'
-                context += ' * - If parts of the original code should be part of the answer, copy them rather than referencing the removed code.\n'
-                context += ' */\n'
+                prefix += '/* Rules:\n'
+                prefix += ' * - If parts of the original code should be part of the answer, copy them rather than referencing the removed code.\n'
+                prefix += ' */\n'
         else:
             return []
 
-        response_insert = self.call_chatcoder(prefix, suffix, context, file, line, task)
+        response_insert = self.call_chatcoder(prefix, file, line, task)
+
+        if (response_insert.get('error')):
+            return [response_insert]
 
         if response_insert:
             if (deleting and deleting.count('\n') > 0):
@@ -1670,107 +1758,74 @@ class PipeLine:
                 self.refs[task['target']] = code
         return [response_insert]
 
-    def call_chatcoder(self, prefix: str, suffix: str, context: str, file: str, line: int, task: dict) -> str:
-        model = "qwen2.5-coder:32b"
-        sys_prompt = { "role": "system", "content":
-            """
-        You are an expert C programmer. You are given specs and context. Answer with C code only.
-
-        - *** You MUST NOT include any explanations or comments in your response. ***
-        - *** You MUST NEVER place stubs *** : always go for the full implementation.
-        - *** YOU MUST NEVER make assumptions about existing symbols, functions, macros or types that are not explicitly mentioned or shown in the context.
-
-        YOU ARE NOT ALLOWED to use any types, macros or call any functions that are not part of the context provided as part of the prompt.
-
-        """
-
-          }
-
-        #rules = self.get_rules('coding')
-        #if len(rules) > 0:
-        #    rules = '\nHere are some mandatory rules to follow:\n' + rules + '\n'
-        #prefix += rules
-
-
-        prefix += context
+    def call_chatcoder(self, prefix: str, file: str, line: int, task: dict) -> str:
         result = ''
-        complete = False
-        found_function = False
         print(f'[bold yellow] 👻 Crafting Code 👻: {file}:{str(line)}[/]')
-        print(f'[yellow]    📎 Context len: prefix {str(len(prefix))} B, suffix {str(len(suffix))} B[/]')
+        print(f'[yellow]📎 Total context size    : {str(len(prefix))}[/]')
 
         # VERBOSE
         #print(f'prefix:\n {prefix}')
 
-        while not complete:
-            response = ollama.chat(model = model,
-                        messages = [ sys_prompt,{"role": "user", "content": prefix}],
-                        options = {
-                            "temperature": 0.4,
-                            "top_p": 0.9,
-                            "repeat_penalty": 1.1,
-                            "num_ctx": 32768,
-                            "min_p": 0.2
-                        },
-                        )
-            try:
-                msg = response.get('message')
-                result += msg.get('content')
-                print("[yellow]Received FIM response...[/]")
-                #print(result)
-
-                if '```c' in result:
-                    result = result.split('```c')[1]
-                elif '```' in result:
-                    result = result.split('```')[1]
-            except requests.RequestException as e:
-                print(f"[FIM Error] {e}")
-                return []
-
-            # If there is an incomplete function in the generation, call again
-            if not complete:
-                try:
-                    tree = ExtendedLlamaScope.parser.parse(result.encode())
-                    root = tree.root_node
-                except Exception as e:
-                    print(f"[bold red][Parser Error][/] {e}")
-
-
-                #print("Parsing reply: ", result)
-                print(" ".join(c.type for c in root.children))
-
-                for node in root.children:
-                    if (node.type == "function_definition" or
-                        node.type == "declaration" or
-                        node.type == "struct_specifier" or
-                        node.type == "enum_specifier" or
-                        node.type == "union_specifier" or
-                        node.type == "type_definition" or
-                        node.type == "preproc_def" or
-                        node.type == "preproc_function_def"):
-                        found_function = True
-                        # Check if this function node spans the entire input
-                        if node.end_byte <= len(result.encode()):
-                            print(f"[bold green]FIM replied with complete {node.type} ✅")
-                            complete = True
-                            result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
-                        break
-                if not found_function:
-                    print("[bold yellow]FIM reply no valid symbol found.[/]")
-                    complete = True
-            if not complete:
-                prefix += result
-
         try:
-            patch = { "path" : file,
-                    "line" : line,
-                    "adding" : result.strip(),
-                    "removing" : ""
-                     }
+            # self.coder_agent.forget()  # Clean slate?
+            msg = self.coder_agent.run(prefix)
+            result += msg
+            print("[yellow]Received coder agent response...[/]")
+            #print(result)
 
-        except Exception as e:
-            print(f"[bold red][Coder Error][/] {e}")
-        return patch
+            if '```c' in result:
+                result = result.split('```c')[1]
+            elif '```' in result:
+                result = result.split('```')[1]
+        except requests.RequestException as e:
+            print(f"[Coder Error] {e}")
+            return {'error': str(e)}
+
+        tree = self.llamascope.parser.parse(result.encode())
+        root = tree.root_node
+        #  print("\n\n".join(c.type for c in root.children))
+
+        task_type = task['type']
+        expected_name = task['target']
+
+        any_type = 'function_definition declaration struct_specifier enum_specifier union_specifier type_definition preproc_def preproc_function_def'
+
+        if task_type == 'FunctionGeneration' or task_type == 'FunctionRefactor':
+            expected_type = 'function_definition'
+        elif task_type == 'TypeDefinition' or task_type == 'TypeRefactor':
+            expected_type = 'type_definition union_specifier struct_specifier enum_specifier'
+        elif task_type == 'MacroDefinition' or task_type == 'MacroRefactor':
+            expected_type = 'preproc_def preproc_function_def'
+        else:
+            expected_type = any_type
+
+        for node in root.children:
+            if node.type in expected_type.split(' '):
+                name = node.text.decode('utf-8', errors='replace')
+                if expected_name in name:
+                    # Check if this function node spans the entire input
+                    if node.end_byte <= len(result.encode()):
+                        print(f"[bold green]Coder replied with complete {node.type} {name}[/] ✅")
+                        result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
+                        #print(f"[bold green]Expected: `{expected_name}`, coder reply: {result}[/]")
+                        try:
+                            patch = { "path" : file,
+                                    "line" : line,
+                                    "adding" : result.strip(),
+                                    "removing" : ""
+                                     }
+
+                        except Exception as e:
+                            print(f"[bold red][Coder Error][/] {str(e)}")
+                            patch = { 'error': str(e)}
+                        return patch
+                    else:
+                        print(f"[bold red]Coder replied with incomplete {node.type}[/] ❌")
+                        patch = { 'error': 'Incomplete code reply.'}
+
+        print(f"[bold red]Coder did not produce a {task_type}[/] ❌")
+        return {'error': 'No code was generated. Please expand the context and try again.'}
+
 
 
     def dispatch_to_editor(self, task):
@@ -1868,6 +1923,12 @@ class PipeLine:
         elif task['type'] == 'PlaceIncludeGuards':
             path = task["file"]
             macro = task["target"]
+            if not os.path.exists(path):
+                dirname = os.path.dirname(task[path])
+                if (len(dirname) > 0) and not os.path.exists(dirname):
+                    os.makedirs(dirname, exist_ok = True)
+                with open(path, 'w') as f:
+                    f.write('\n')
 
             with open(path, "r", encoding="utf-8") as f:
                 n_lines = len(f.readlines())

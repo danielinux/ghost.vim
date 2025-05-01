@@ -216,12 +216,13 @@ function! ghost#NextDiff() abort
 
 
     if len(l:files) > 1
-        let l:index = index(l:files, expand('%'))
-        if l:index == -1 || l:index >= len(l:files)
-            let l:index = 0
+        let g:index = index(l:files, expand('%'))
+        if g:index == -1 || g:index >= len(l:files)
+            let g:index = 0
         endif
-        let l:ghost_file = '.ghost/' . l:files[l:index - 1][2:]
-        let l:orig_file = l:files[l:index - 1]
+        echom "File " . (g:index + 1) . "of " . len(l:files)
+        let l:ghost_file = '.ghost/' . l:files[g:index - 1][2:]
+        let l:orig_file = l:files[g:index - 1]
         echom  'files ' . l:orig_file . ' vs ' . l:ghost_file
         silent! execute 'wincmd l'
         silent! execute 'e ' . l:ghost_file
@@ -237,12 +238,12 @@ function! ghost#PrevDiff() abort
     let l:files = ghost#ChangedFiles()
 
     if len(l:files) > 1
-        let l:index = index(l:files, expand('%'))
-        if l:index <= 0
-            let l:index = len(l:files) - 1
+        let g:index = index(l:files, expand('%'))
+        if g:index <= 0
+            let g:index = len(l:files) - 1
         endif
-        let l:ghost_file = '.ghost/' . l:files[l:index - 1][2:]
-        let l:orig_file = l:files[l:index - 1]
+        let l:ghost_file = '.ghost/' . l:files[g:index - 1][2:]
+        let l:orig_file = l:files[g:index - 1]
         silent! execute 'wincmd l'
         silent! execute 'e ' . l:ghost_file
         silent! execute 'diffthis'

@@ -29,7 +29,6 @@ task_list = [
     {"type": "FunctionGeneration", "description": "Create a new function based on a task description and context. Specify arguments and return value.", "agent": "fim"},
     {"type": "TypeDefinition", "description": "Define a new struct, enum, or typedef to support new data abstractions.", "agent": "fim"},
     {"type": "StubCompletion", "description": "Complete the body of a stub function currently defined with empty braces.", "agent": "fim"},
-    {"type": "SymbolImplementation", "description": "Provide the implementation of a declared but undefined function or symbol.", "agent": "fim"},
     {"type": "MacroDefinition", "description": "Add a new macro definition or constant using #define or enum values. Ensure that the file exists. \"target\" argument contains the whole macro.", "agent": "fim"},
 
 
@@ -52,7 +51,14 @@ Each task MUST include the following fields:
   - `"file"`: the full relative path to the file where the change must be applied.  Must point to a real file, verified via lookup tools or explicitly named by the user.  Do not invent filenames. Do not guess. Use only confirmed file paths.
   - `"details"`: a short human-readable summary of what this task will do
   - `"references"`: a list of symbols, macros, or types relevant to this task (from the original context)
-  - `"peripherals"`: if the task involves embedded code or hardware configuration, include a list of the relevant peripherals (e.g. `["USART2"]`, `["DMA1", "GPIOA"]`)
+  - `"peripherals"`: mandatory if the task involves embedded code or refers to
+    specific hardware configuration. Include a list of the relevant peripherals, each one in the format:
+    {"name":"PERIPHERAL_NAME", "registers":["REGISTER_NAME1", "REGISTER_NAME2"]}
+   example:  [
+        { "name":"USART2", "registers":["CR1", "SR"] },
+        { "name":"DMA1" },
+        { "name": "GPIOA", "registers":["MODER", "ODR"] },
+    ]
 
 The following fields are OPTIONAL and should be included only when relevant:
 
@@ -71,7 +77,7 @@ Use this structure for each task:
   "file": "FilePath",
   "details": "A human-readable summary of the task",
   "references": ["RelatedSymbol1", "RelatedSymbol2"],
-  "peripherals": ["Peripheral1", "Peripheral2"]
+  "peripherals": [{"name":"Peripheral1"}, {"name":"Peripheral2"}]
 }
 ```
 If needed, you may include optional fields:
@@ -83,7 +89,13 @@ If needed, you may include optional fields:
   "file": "FilePath",
   "details": "A human-readable summary of the task",
   "references": ["RelatedSymbol1", "RelatedSymbol2"],
-  "peripherals": ["Peripheral1", "Peripheral2"],
+  "peripherals":[
+                  { "name": "Peripheral1",
+                    "registers": ["register1","register2"]
+                  },
+                  { "name": "Peripheral2"
+                  }
+               ],
   "target_new": "NewSymbolNameOrPath",
   "location_hint": "LineOrTextHint"
 }
