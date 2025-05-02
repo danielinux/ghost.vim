@@ -951,14 +951,17 @@ class ExtendedLlamaScope(CodeLookup, Tool):
             return [], ''
 
     def find_first_code_line(self, path):
-        with open(path, 'rb') as f:
-            content = f.read()
-        tree = self.parser.parse(content)
-        root = tree.root_node
-        for node in root.children:
-            if node.type == 'comment':
-                continue
-            return self.byte_to_line(path, node.start_byte)
+        try:
+            with open(path, 'rb') as f:
+                content = f.read()
+            tree = self.parser.parse(content)
+            root = tree.root_node
+            for node in root.children:
+                if node.type == 'comment':
+                    continue
+                return self.byte_to_line(path, node.start_byte)
+        except:
+            pass
         return 0
 
     def byte_to_line(self, path: str, byte_offset: int) -> int:
@@ -1115,7 +1118,9 @@ class PipeLine:
         prompt_path = os.path.join(os.path.dirname(__file__), 'task_agent_prompt.txt')
         with open(prompt_path, 'r') as f:
             task_sys = f.read()
-        self.task_agent = Agent(self, system = task_sys,
+        self.task_agent = Agent(self,
+                            #model='qwen2.5-coder:32b',
+                            system = task_sys,
                             tools = [self.llamascope, self.svdtool],
                             options={
                                 "temperature": 0.5,
@@ -1130,7 +1135,7 @@ class PipeLine:
         with open(chatcoder_path, 'r') as f:
             chatcoder_sys = f.read()
         self.coder_agent = Agent(pipeline = self,
-                                 model='qwen2.5-coder:32b',
+                                 #model='qwen2.5-coder:32b',
                                  system=chatcoder_sys,
                                  tools=[],  # No tools
                                  options={
@@ -1414,7 +1419,7 @@ class PipeLine:
             if '```json' in response:
                 response = response.replace('```json', '').replace('```', '')
             tasks = json.loads(response)
-            print("[bold yellow]Tasks:[/]")
+            print("\n[bold yellow]Tasks:[/]")
             for t in tasks:
                 print('  - [gold1]' + t.get('type') + '[/]: [thistle1]' + t.get('details') + '[/]')
 
@@ -1527,21 +1532,21 @@ class PipeLine:
                     task.update({'error':str(err)})
                     break
 
-
-                for tp in task_patches:
-                    if not tp.get('path'):
-                        task.update({'error': 'No path could be identified by coder.'})
-                        continue
-                    if tp.get('line', -1) < 0:
-                        task.update({'error': 'No relevant line could be identified by coder in file'})
-                        continue
-
                 for tp in task_patches:
                     if tp.get('error') and not task.get('error'):
                         task.update({'error':tp['error']})
-                        continue
+                        break
 
-                if task.get('error'):
+
+                if not task.get('error'):
+                    for tp in task_patches:
+                        if not tp.get('path'):
+                            task.update({'error': 'No path could be identified by coder.'})
+                            continue
+                        if tp.get('line', -1) < 0:
+                            task.update({'error': 'No relevant line could be identified by coder in file'})
+                            continue
+                else:
                     continue
 
                 # In-place sorting for patching in the right order
@@ -1771,7 +1776,7 @@ class PipeLine:
             msg = self.coder_agent.run(prefix)
             result += msg
             print("[yellow]Received coder agent response...[/]")
-            #print(result)
+            print(result)
 
             if '```c' in result:
                 result = result.split('```c')[1]
@@ -1805,13 +1810,14 @@ class PipeLine:
                 if expected_name in name:
                     # Check if this function node spans the entire input
                     if node.end_byte <= len(result.encode()):
-                        print(f"[bold green]Coder replied with complete {node.type} {name}[/] ✅")
-                        result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
+                        print(f"[bold green]Coder replied with {node.type} {expected_name}[/] ✅")
+                        # Uncomment to only include the symbol requested
+                        # result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
                         #print(f"[bold green]Expected: `{expected_name}`, coder reply: {result}[/]")
                         try:
                             patch = { "path" : file,
                                     "line" : line,
-                                    "adding" : result.strip(),
+                                    "adding" : result,
                                     "removing" : ""
                                      }
 
@@ -1822,6 +1828,29 @@ class PipeLine:
                     else:
                         print(f"[bold red]Coder replied with incomplete {node.type}[/] ❌")
                         patch = { 'error': 'Incomplete code reply.'}
+        for node in root.children:
+            # detect ifdef
+            if node.type == 'preproc_if':
+                for child in node.children:
+                    name = child.text.decode('utf-8', errors='replace')
+                    if expected_name in name:
+                        # Check if this function node spans the entire input
+                        if node.end_byte <= len(result.encode()):
+                            print(f"[bold green]Coder replied with {child.type} {expected_name} inside a preprocessor conditional[/] ✅")
+                            # Uncomment to only include the symbol requested
+                            # result = result.encode()[node.start_byte:node.end_byte].decode(errors='replace')
+                            #print(f"[bold green]Expected: `{expected_name}`, coder reply: {result}[/]")
+                            try:
+                                patch = { "path" : file,
+                                        "line" : line,
+                                        "adding" : result,
+                                        "removing" : ""
+                                    }
+
+                            except Exception as e:
+                                print(f"[bold red][Coder Error][/] {str(e)}")
+                                patch = { 'error': str(e)}
+                            return patch
 
         print(f"[bold red]Coder did not produce a {task_type}[/] ❌")
         return {'error': 'No code was generated. Please expand the context and try again.'}

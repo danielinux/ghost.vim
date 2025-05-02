@@ -210,49 +210,57 @@ function! ghost#ChangedFiles() abort
 endfunction
 
 function! ghost#NextDiff() abort
-    " Move to the next diff in the list of changed files
-    let l:files = ghost#ChangedFiles()
-    " echom 'files:' . len(l:files)
+  let l:files = ghost#ChangedFiles()
+  if len(l:files) == 0
+    echom "No diffs found"
+    return
+  endif
 
+  " Use a persistent global index
+  if !exists('g:ghost_diff_index')
+    let g:ghost_diff_index = 0
+  else
+    let g:ghost_diff_index = (g:ghost_diff_index + 1) % len(l:files)
+  endif
 
-    if len(l:files) > 1
-        let g:index = index(l:files, expand('%'))
-        if g:index == -1 || g:index >= len(l:files)
-            let g:index = 0
-        endif
-        echom "File " . (g:index + 1) . "of " . len(l:files)
-        let l:ghost_file = '.ghost/' . l:files[g:index - 1][2:]
-        let l:orig_file = l:files[g:index - 1]
-        echom  'files ' . l:orig_file . ' vs ' . l:ghost_file
-        silent! execute 'wincmd l'
-        silent! execute 'e ' . l:ghost_file
-        silent! execute 'diffthis'
-        silent! execute 'wincmd h'
-        silent! execute 'e ' . l:orig_file
-        silent! execute 'diffthis | wincmd l'
-    endif
+  call ghost#ShowDiffPair(l:files[g:ghost_diff_index])
 endfunction
 
 function! ghost#PrevDiff() abort
-    " Move to the prev diff in the list of changed files
-    let l:files = ghost#ChangedFiles()
+  let l:files = ghost#ChangedFiles()
+  if len(l:files) == 0
+    echom "No diffs found"
+    return
+  endif
 
-    if len(l:files) > 1
-        let g:index = index(l:files, expand('%'))
-        if g:index <= 0
-            let g:index = len(l:files) - 1
-        endif
-        let l:ghost_file = '.ghost/' . l:files[g:index - 1][2:]
-        let l:orig_file = l:files[g:index - 1]
-        silent! execute 'wincmd l'
-        silent! execute 'e ' . l:ghost_file
-        silent! execute 'diffthis'
-        silent! execute 'wincmd h'
-        silent! execute 'e ' . l:orig_file
-        silent! execute 'diffthis'
-        silent! execute 'wincmd l'
-    endif
+  if !exists('g:ghost_diff_index')
+    let g:ghost_diff_index = len(l:files) - 1
+  else
+    let g:ghost_diff_index = (g:ghost_diff_index - 1 + len(l:files)) % len(l:files)
+  endif
+
+  call ghost#ShowDiffPair(l:files[g:ghost_diff_index])
 endfunction
+
+function! ghost#ShowDiffPair(file) abort
+  let l:orig = a:file
+  let l:ghost = '.ghost/' . a:file
+
+  " Close any old diff views
+  silent! diffoff!
+  silent! only
+
+  " Open original on left, ghost copy on right
+  execute 'edit ' . l:orig
+  diffthis
+  vsplit
+  execute 'edit ' . l:ghost
+  diffthis
+
+  redraw
+  echom 'Diff ' . (g:ghost_diff_index + 1) . ' of ' . len(ghost#ChangedFiles()) . ': ' . l:orig
+endfunction
+
 
 function! ghost#OnExit(job, exit_code) abort
   " Find mirror file to the one open in the current buffer in
