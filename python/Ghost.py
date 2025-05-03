@@ -1104,9 +1104,11 @@ class PipeLine:
         prompt_path = os.path.join(os.path.dirname(__file__), 'prompt_agent_prompt.txt')
         with open(prompt_path, 'r') as f:
             prompt_sys = f.read()
-        self.prompt_agent = Agent(self, system=prompt_sys,
-                        tools = [self.llamascope, self.web],
-                                options={
+        self.prompt_agent = Agent(self,
+                                  model='qwen3:32b',  # Use the appropriate model for your setup
+                                  system=prompt_sys,
+                                  tools=[self.llamascope, self.web],
+                                  options={
                                     "temperature": 0.1,
                                     "top_p": 0.6,
                                     "repeat_penalty": 1.05,
@@ -1119,7 +1121,6 @@ class PipeLine:
         with open(prompt_path, 'r') as f:
             task_sys = f.read()
         self.task_agent = Agent(self,
-                            #model='qwen2.5-coder:32b',
                             system = task_sys,
                             tools = [self.llamascope, self.svdtool],
                             options={
@@ -1135,7 +1136,8 @@ class PipeLine:
         with open(chatcoder_path, 'r') as f:
             chatcoder_sys = f.read()
         self.coder_agent = Agent(pipeline = self,
-                                 #model='qwen2.5-coder:32b',
+                                 model='qwen2.5-coder:32b',
+                                 #model='qwen3:32b',
                                  system=chatcoder_sys,
                                  tools=[],  # No tools
                                  options={
@@ -1320,7 +1322,7 @@ class PipeLine:
                 prompt = prompt[0:idx] + '\n\n' + file_content + prompt[idx + len(file_name):]
             try:
                 usr_prompt = """
-                Work one step at a time to achieve the final answer. Use the following plan:
+                Use the following plan to convert the user prompt into a list of actions.
 
                 ---
 
@@ -1328,10 +1330,19 @@ class PipeLine:
                 - Read the user's request and translate it into accurate technical terminology for embedded C.
 
                 🔹 **Phase 2: Explore the Codebase using the tools**
+                - You MUST STOP generating the final answer, prepare a tool_call query and use the provided tool_calls APIs to verify the existence and usage of any mentioned symbols, types, macros, or files.
+                - Use the list of known tool_calls APIs (provided separately) to fill any missing information in each task accordingly.
+                - Work one step at a time. Use the following format:
+                     1. Questions: what part of the architecture is not clear, what kind of information are missing?
+                     2. Thought: you should always think about what to do.
+                      - Do you have enough information to answer, do you know all the ADT and related functions, or do you need to call APIs to complete the analysis?
+                     3. API identification: look for the API in the prompt to find out which tools are available. Identify one or more to call to find the information you are looking for.
+                     4. Observation: the result of the action
+                          ... (this Thought/API identification/Action/Observation sequence can be repeated zero or more times)
                 - Do not make assumptions about the codebase or the memory mapped registers and addresses
+                - Do not make assumptions about the existence of files, libraries or dependencies in the codebase. You are provided with tools to verify if files are there. Use them.
                 - Identify functions, files, and types that may need to be created or modified.
                 - Discover domain-relevant constructs using the same types or functions.
-                - You MUST STOP generating the final answer, prepare a tool_call query and  use the provided tool APIs to verify the existence and usage of any mentioned symbols, types, macros, or files.
 
                 🔹 **Phase 3: Define Code Actions**
                 - Break the work into discrete, single-file code actions.
@@ -1355,7 +1366,7 @@ class PipeLine:
 
                 ---
 
-                🛑 Do not invent or assume anything. Only output verified information.
+                🛑 Do not invent or assume anything. Only output specific information that you have verified by calling tool_calls API and parsing the response from the tools.
                 Your final response must contain **only the TODO list**, with no commentary or explanations.
 
                 ---
@@ -1389,7 +1400,13 @@ class PipeLine:
             - Determine the overall goal and break it into smaller, self-contained actions if needed.
             - If hardware is involved, identify the relevant peripherals or memory-mapped components (e.g., UART, SPI, DMA). If available, use svd_lookup_peripherals() tool_call, to identify registers and fields.
             - For each action, identify a unique symbol (function, macro, type, etc.) to be created, modified, or removed. All symbols mentioned must be identified and confirmed to exist within the current codebase.
-            - Use the list of known Action types (provided separately) to classify each task accordingly.
+            - Use the list of known tool_calls APIs (provided separately) to classify each task accordingly.  Work one step at a time. Use the following format:
+                1. Questions: what part of the architecture is not clear, what kind of information are missing?
+                2. Thought: you should always think about what to do.
+                 - Do you have enough information to answer, do you know all the ADT and related functions, or do you need to call APIs to complete the analysis?
+                3. API identification: look for the API in the prompt to find out which tools are available. Identify one or more to call to find the information you are looking for.
+                4. Observation: the result of the action
+                     ... (this Thought/API identification/Action/Observation sequence can be repeated zero or more times)
             - Ensure each task affects only one symbol or one file. If a change spans multiple symbols or files, split it into multiple tasks.
             - Fill in all required task fields: type, target, file, details, references, and peripherals (if applicable). Don't be vague, be specific when naming symbols.
             - Never assume existence: you must always look up the correct specific symbol within the repository.
@@ -1434,7 +1451,14 @@ class PipeLine:
         Review the current task list. If any task is missing critical information or if there are logical errors in the task list, please correct them.
         When the task list is complete and accurate, output the corrected JSON array of tasks.
 
-        Use the provided tool_call API to check for symbols in code files.
+        - Use the list of known tool_calls APIs (provided separately) to fill any missing information in each task accordingly.  Work one step at a time. Use the following format:
+             1. Questions: what part of the architecture is not clear, what kind of information are missing?
+             2. Thought: you should always think about what to do.
+              - Do you have enough information to answer, do you know all the ADT and related functions, or do you need to call APIs to complete the analysis?
+             3. API identification: look for the API in the prompt to find out which tools are available. Identify one or more to call to find the information you are looking for.
+             4. Observation: the result of the action
+                  ... (this Thought/API identification/Action/Observation sequence can be repeated zero or more times)
+
         Your output must consist of a **pure JSON list only**. Do not include comments, thoughts, or explanations of any kind.
 
         ---
@@ -1508,7 +1532,9 @@ class PipeLine:
                     OUTPUT JSON:
                     """
 
-                    print(prompt)
+                    print("[red]Error encountered while processing task. Reviewing...[/]")
+                    print(f"[red]Reported error: {task.get('error')}. Retrying.[/]")
+
                     response = self.task_critic_agent.run(prompt)
                     if '```json' in response:
                         response = response.replace('```json', '').replace('```', '')
@@ -1526,7 +1552,8 @@ class PipeLine:
                     if len(task_patches) == 0:
                         task_patches = self.dispatch_to_editor(task)
                     if len(task_patches) == 0:
-                        print("No tasks parsed.")
+                        print('Task produced no patches.')
+                        tasks.remove(task)  # Remove the task from the list if no patches were generated.
                         break
                 except Exception as err:
                     task.update({'error':str(err)})
@@ -1609,7 +1636,6 @@ class PipeLine:
         embedded_dev = self.svdtool.svd_device_info()
         if embedded_dev and task.get('peripherals'):
 
-            print(f"*** [yellow]Found embedded device information for this task.[/]")
             peri_list = task['peripherals']
 
 
@@ -1625,12 +1651,13 @@ class PipeLine:
             if len(peri_list) > 0:
                 prefix += 'A description of the relevant peripherals for this task in JSON format is provided here below:\n'
             for p in peri_list:
-                print(f'*** [yellow]Including peripheral description for {p["name"]}[/]')
+                print(f'\n[yellow2]Including peripheral description: {p["name"]}[/]', end = '')
                 svd_data += SVDTool.lookup_peripherals(p['name'])
                 if p.get('registers'):
                     for r in p['registers']:
                         svd_data += SVDTool.lookup_register_in_periph(['name'], r)
-
+                        print(f' + [yellow2]{r}[/]', end = '')
+            print('')
             print(f'[yellow2]Added {str(len(svd_data))} bytes of SVD data to the context[/]')
             prefix += svd_data
 
@@ -1669,7 +1696,7 @@ class PipeLine:
             deleting = code[sym['start']:sym['end']]
             print(f'[magenta](replacing code in file {file} at line {line} len {len(deleting)} bytes)[/magenta]')
 
-            prefix = 'Your Task: Rewrite the code provided below: \n'
+            prefix += 'Your Task: Rewrite the code provided below: \n'
             prefix += deleting
             prefix += '\n\n'
             prefix += 'Specifications: ' + task['details'] + '\n'
@@ -1726,14 +1753,14 @@ class PipeLine:
                 with open(file, 'rb') as f:
                     content = f.read().decode('utf-8', errors='replace')
                 line = self.llamascope.find_first_code_line(file)
-                prefix = f'New macro definition: {task["target"]}\n'
+                prefix += f'New macro definition: {task["target"]}\n'
                 prefix += 'Specifications: ' + task['details'] + '\n'
             else:
                 line = sym['line']
                 with open(file, 'rb') as f:
                     code = f.read().decode('utf-8', errors='replace')
                 deleting = code[sym['start']:sym['end']]
-                prefix = '/* Original macro before the requested changes: */ \n' + deleting + '\n'
+                prefix += '/* Original macro before the requested changes: */ \n' + deleting + '\n'
                 prefix += 'Specifications: ' + task['details'] + '\n'
                 prefix += '/* Rules:\n'
                 prefix += ' * - If parts of the original code should be part of the answer, copy them rather than referencing the removed code.\n'
@@ -1775,6 +1802,10 @@ class PipeLine:
             # self.coder_agent.forget()  # Clean slate?
             msg = self.coder_agent.run(prefix)
             result += msg
+            while result.startswith('\n'):
+                result = result[1:]
+
+
             print("[yellow]Received coder agent response...[/]")
             print(result)
 
